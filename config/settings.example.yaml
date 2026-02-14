@@ -1,0 +1,119 @@
+# Talkie Voice Assistant - Example Configuration
+# Copy this file to settings.yaml and update it with your actual settings
+
+app:
+  name: Talkie Voice Assistant
+  version: 1.0.0
+  debug: false
+
+# Audio settings
+audio:
+  sample_rate: 16000
+  chunk_size: 4096
+  channels: 1
+  format: int16
+
+# Speech-to-Text (STT) - whisper.cpp
+stt:
+  primary: whisper
+  whisper:
+    server_url: http://localhost:8081
+    model: base.en
+    language: en
+    binary_path: /path/to/whisper.cpp/build/bin/whisper-server
+    model_path: /path/to/models/ggml-base.en.bin
+
+# Text-to-Speech (TTS) - Default: Edge TTS (online, free)
+tts:
+  engine: edge_tts  # Options: edge_tts, coqui, pyttsx3
+  edge_voice: en-US-AriaNeural  # Default voice for Edge TTS
+  coqui_model: tts_models/multilingual/multi-dataset/xtts_v2  # Coqui TTS model
+  coqui_device: auto  # Options: auto, cuda, cpu
+  voice_id: null
+  rate: 180
+  volume: 1.0
+  default_language: auto
+  speaker_id: null
+  speakers_list: []
+
+# LLM Settings
+llm:
+  provider: llama.cpp
+  base_url: http://localhost:8080
+  model: llama-3.2-3b-instruct
+  binary_path: /path/to/llama.cpp/build/bin/llama-server
+  max_tokens: 512
+  temperature: 0.7
+  system_prompt: |
+    You are Talkie, a helpful voice assistant. You communicate through voice, so keep responses concise and natural.
+
+    You have access to tools that allow you to:
+    - Check the weather
+    - Get current date and time
+    - Execute system commands
+    - Read and write files
+    - Search the web for current information
+    - Get latest news on any topic
+
+    IMPORTANT INSTRUCTIONS:
+
+    For weather queries, the system can automatically detect your location from your IP address.
+    If user asks "what's the weather" or similar without providing a specific location, the weather tool will auto-detect your location.
+    Do not ask for the location unless the user provides a specific city.
+
+    1. When the user asks about current events, news, or information that might not be in your training data, USE the web_search or web_news tools to find current information. Do not guess or make up information about current events.
+
+    2. For date and time queries (e.g., "what date is today", "what time is it", "what day is it"), USE the 'datetime' tool to get the current system date and time. This is the most accurate method.
+
+    3. When responding to the user, just provide your response as normal text. The system will automatically convert your responses to speech.
+
+    4. NEVER output function calls, tool syntax, or code-like text in your responses. Just speak naturally.
+
+    When you need information from the user, ask them to speak.
+
+    Be friendly, helpful, and efficient.
+
+# MCP Server Configuration
+mcp:
+  server_name: talkie-server
+  tools_enabled:
+    - listen
+    - weather
+    - execute_command
+    - read_file
+    - write_file
+    - list_directory
+    - wake_word
+    - voice_activity
+    - timer
+    - calculator
+    - datetime
+    - web_search
+    - web_news
+
+# Weather Settings
+weather:
+  api_key: null  # Optional: OpenWeatherMap API key (get from openweathermap.org)
+  default_city: San Francisco
+  units: metric  # 'metric' (Celsius) or 'imperial' (Fahrenheit)
+  auto_detect_location: true  # Auto-detect from IP address
+
+# Web Search Settings
+web_search:
+  tavily_api_key: null  # Required: Get from https://tavily.com (free tier: 1000 calls/month)
+  use_duckduckgo_fallback: true  # Use DuckDuckGo as backup if Tavily fails
+
+# Wake Word Detection
+wake_word:
+  phrases:
+    - hey talkie
+    - ok talkie
+    - talkie
+  simulation_mode: true  # Set to false to use real wake word detection
+  sensitivity: 0.7
+
+# Voice Activity Detection
+voice_activity:
+  threshold: 0.5
+  frame_duration_ms: 30
+  padding_duration_ms: 300

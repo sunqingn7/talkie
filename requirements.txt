@@ -1,0 +1,43 @@
+# Voice Assistant - MCP-First Architecture
+# Core dependencies
+numpy>=1.21.0
+requests>=2.28.0
+pyyaml>=6.0
+
+# Audio input from microphone (requires portaudio19-dev system library)
+pyaudio>=0.2.11
+
+# TTS (Coqui TTS for high quality voices - RECOMMENDED)
+coqui-tts[codec,zh]>=0.27.0
+# PyTorch is required for Coqui TTS and installed automatically
+# Language extras: [codec] for audio, [zh] for Chinese support
+
+# Alternative TTS engines (fallback)
+pyttsx3>=2.90
+gtts>=2.3.2
+
+# MCP
+mcp>=1.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Web search
+# Tavily API (RECOMMENDED - more reliable, requires API key)
+tavily-python>=0.5.0
+# DuckDuckGo (fallback, no API key required but less reliable)
+ddgs>=9.0.0
+
+# Optional: Better TTS quality
+# edge-tts>=6.1.0
+
+# Edge TTS (Microsoft Edge online TTS service)
+edge-tts>=6.1.0
+
+# Web control panel
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+jinja2>=3.1.0
+python-multipart>=0.0.6
+psutil>=5.9.0  # For process management (LLM server control)

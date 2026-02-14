@@ -1,0 +1,380 @@
+"""
+LLM Model Manager for Talkie
+Handles llama-server lifecycle and model switching
+"""
+
+import os
+import subprocess
+import signal
+import time
+import yaml
+import glob
+import psutil
+from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+
+
+class LLMModelManager:
+    """Manages llama-server processes and model switching."""
+    
+    def __init__(self, config_path: str = "config/models.yaml"):
+        self.config_path = config_path
+        self.config = self._load_config()
+        self.current_process: Optional[subprocess.Popen] = None
+        self.current_model_id: Optional[str] = None
+        self.cache_dir = os.path.expanduser("~/.cache/llama.cpp")
+        
+    def _load_config(self) -> dict:
+        """Load model configuration."""
+        # Try multiple paths
+        paths = [
+            self.config_path,
+            os.path.join(os.path.dirname(__file__), '..', '..', self.config_path),
+            os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'models.yaml'),
+        ]
+        
+        for path in paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    return yaml.safe_load(f)
+        
+        # Return default config if file not found
+        return {"models": {}, "global_settings": {}}
+    
+    def scan_available_models(self) -> List[Dict]:
+        """Scan cache directory for available GGUF models."""
+        available_models = []
+        
+        # Get configured models
+        configured_models = self.config.get("models", {})
+        
+        # Scan cache directory
+        cache_path = Path(self.cache_dir)
+        if cache_path.exists():
+            for gguf_file in cache_path.glob("*.gguf"):
+                # Skip incomplete downloads
+                if ".downloadInProgress" in gguf_file.name:
+                    continue
+                    
+                # Find matching config
+                model_id = None
+                model_config = None
+                
+                for mid, mconfig in configured_models.items():
+                    if mconfig.get("file") == gguf_file.name:
+                        model_id = mid
+                        model_config = mconfig
+                        break
+                
+                # If no config found, create basic info
+                if not model_config:
+                    model_id = gguf_file.stem.replace("_", "-").lower()
+                    size_gb = gguf_file.stat().st_size / (1024**3)
+                    model_config = {
+                        "name": gguf_file.stem.replace("_", " ").replace("-", " ").title(),
+                        "description": f"Model file: {gguf_file.name}",
+                        "file": gguf_file.name,
+                        "size": f"{size_gb:.1f}GB",
+                        "quantization": "Unknown",
+                        "recommended_for": ["general"],
+                        "llama_server_params": self._get_default_params()
+                    }
+                
+                available_models.append({
+                    "id": model_id,
+                    **model_config,
+                    "path": str(gguf_file),
+                    "exists": True
+                })
+        
+        # Also add configured models that don't exist yet
+        for model_id, model_config in configured_models.items():
+            if not any(m["id"] == model_id for m in available_models):
+                available_models.append({
+                    "id": model_id,
+                    **model_config,
+                    "path": None,
+                    "exists": False
+                })
+        
+        return available_models
+    
+    def _get_default_params(self) -> dict:
+        """Get default llama-server parameters."""
+        return {
+            "ctx_size": 8192,
+            "threads": 8,
+            "threads_batch": 8,
+            "n_gpu_layers": -1,
+            "batch_size": 2048,
+            "parallel": 1,
+            "host": "localhost",
+            "port": 8080,
+            "mlock": False,
+            "no_mmap": False,
+            "cont_batching": True,
+            "flash_attn": True,
+            "embeddings": True
+        }
+    
+    def get_running_model(self) -> Optional[Dict]:
+        """Get information about currently running model."""
+        # Check if llama-server is running
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if proc.info['name'] == 'llama-server':
+                    cmdline = proc.info['cmdline'] or []
+                    
+                    # Extract model info from command line
+                    model_path = None
+                    for i, arg in enumerate(cmdline):
+                        if arg in ['-m', '--model'] and i + 1 < len(cmdline):
+                            model_path = cmdline[i + 1]
+                            break
+                        elif arg.startswith('-m'):
+                            model_path = arg[2:]
+                            break
+                    
+                    # Also check for --hf flag (HuggingFace download)
+                    if not model_path:
+                        for i, arg in enumerate(cmdline):
+                            if arg.startswith('--hf'):
+                                model_path = arg
+                                break
+                    
+                    return {
+                        "pid": proc.info['pid'],
+                        "model_path": model_path,
+                        "cmdline": cmdline,
+                        "running": True
+                    }
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        return None
+    
+    def stop_server(self) -> bool:
+        """Stop the running llama-server."""
+        running = self.get_running_model()
+        
+        if not running:
+            print("⚠️  No llama-server process found")
+            return True
+        
+        pid = running["pid"]
+        print(f"🛑 Stopping llama-server (PID: {pid})...")
+        
+        try:
+            # Try graceful termination first
+            os.kill(pid, signal.SIGTERM)
+            
+            # Wait for process to terminate
+            for _ in range(10):  # Wait up to 5 seconds
+                if not psutil.pid_exists(pid):
+                    print("✅ llama-server stopped gracefully")
+                    return True
+                time.sleep(0.5)
+            
+            # Force kill if still running
+            if psutil.pid_exists(pid):
+                print("⚠️  Force stopping llama-server...")
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.5)
+            
+            if not psutil.pid_exists(pid):
+                print("✅ llama-server stopped")
+                return True
+            else:
+                print("❌ Failed to stop llama-server")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error stopping server: {e}")
+            return False
+    
+    def start_server(self, model_id: str, wait_for_ready: bool = True) -> Tuple[bool, str]:
+        """Start llama-server with specified model."""
+        # Get model configuration
+        models = self.scan_available_models()
+        model = next((m for m in models if m["id"] == model_id), None)
+        
+        if not model:
+            return False, f"Model '{model_id}' not found"
+        
+        if not model.get("exists"):
+            return False, f"Model file not found: {model.get('file')}"
+        
+        # Stop any running server
+        if not self.stop_server():
+            return False, "Failed to stop existing server"
+        
+        # Build command
+        binary_path = self.config.get("global_settings", {}).get(
+            "binary_path", 
+            "/home/qing/Project/llama.cpp/build/bin/llama-server"
+        )
+        
+        if not os.path.exists(binary_path):
+            return False, f"llama-server binary not found: {binary_path}"
+        
+        params = model.get("llama_server_params", self._get_default_params())
+        
+        cmd = [binary_path]
+        
+        # Add model
+        cmd.extend(["-m", model["path"]])
+        
+        # Add parameters
+        if params.get("ctx_size"):
+            cmd.extend(["-c", str(params["ctx_size"])])
+        
+        if params.get("threads"):
+            cmd.extend(["-t", str(params["threads"])])
+        
+        if params.get("threads_batch"):
+            cmd.extend(["-tb", str(params["threads_batch"])])
+        
+        if params.get("n_gpu_layers") is not None:
+            cmd.extend(["-ngl", str(params["n_gpu_layers"])])
+        
+        if params.get("batch_size"):
+            cmd.extend(["-b", str(params["batch_size"])])
+        
+        if params.get("parallel"):
+            cmd.extend(["--parallel", str(params["parallel"])])
+        
+        if params.get("host"):
+            cmd.extend(["--host", params["host"]])
+        
+        if params.get("port"):
+            cmd.extend(["--port", str(params["port"])])
+        
+        if params.get("mlock"):
+            cmd.append("--mlock")
+        
+        if params.get("no_mmap"):
+            cmd.append("--no-mmap")
+        
+        if params.get("cont_batching"):
+            cmd.append("--cont-batching")
+        
+        if params.get("flash_attn"):
+            # Use explicit 'on' value to avoid parsing issues with next argument
+            cmd.extend(["--flash-attn", "on"])
+        
+        if params.get("embeddings"):
+            cmd.append("--embeddings")
+        
+        if params.get("numa"):
+            cmd.extend(["--numa", params["numa"]])
+        
+        # Enable Jinja templating for chat formats
+        cmd.append("--jinja")
+        
+        print(f"🚀 Starting llama-server with model: {model['name']}")
+        print(f"   Command: {' '.join(cmd)}")
+        
+        try:
+            # Start server process
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=os.setsid  # Create new process group
+            )
+            
+            self.current_process = process
+            self.current_model_id = model_id
+            
+            if wait_for_ready:
+                print("   Waiting for server to be ready...")
+                if self._wait_for_server_ready(params.get("host", "localhost"), params.get("port", 8080)):
+                    print(f"✅ Server ready! Model: {model['name']}")
+                    return True, f"Server started with model: {model['name']}"
+                else:
+                    return False, "Server failed to start within timeout"
+            else:
+                return True, "Server started (not waiting for ready)"
+                
+        except Exception as e:
+            return False, f"Failed to start server: {str(e)}"
+    
+    def _wait_for_server_ready(self, host: str, port: int, timeout: int = 60) -> bool:
+        """Wait for llama-server to be ready."""
+        import urllib.request
+        import json
+        
+        start_time = time.time()
+        url = f"http://{host}:{port}/health"
+        
+        while time.time() - start_time < timeout:
+            try:
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    if response.status == 200:
+                        return True
+            except:
+                pass
+            
+            # Also check if process is still running
+            if self.current_process and self.current_process.poll() is not None:
+                # Process exited
+                stdout, stderr = self.current_process.communicate()
+                print(f"❌ Server process exited with code: {self.current_process.returncode}")
+                if stderr:
+                    print(f"   Error: {stderr[:500]}")
+                return False
+            
+            time.sleep(0.5)
+        
+        return False
+    
+    def switch_model(self, model_id: str) -> Dict:
+        """Switch to a different model."""
+        print(f"🔄 Switching to model: {model_id}")
+        
+        success, message = self.start_server(model_id)
+        
+        return {
+            "success": success,
+            "message": message,
+            "model_id": model_id if success else None,
+            "timestamp": time.time()
+        }
+    
+    def get_model_info(self, model_id: str) -> Optional[Dict]:
+        """Get detailed information about a model."""
+        models = self.scan_available_models()
+        return next((m for m in models if m["id"] == model_id), None)
+    
+    def restart_server(self) -> Dict:
+        """Restart the current server."""
+        if not self.current_model_id:
+            running = self.get_running_model()
+            if running and running.get("model_path"):
+                # Try to extract model ID from path
+                for model in self.scan_available_models():
+                    if model.get("path") == running["model_path"]:
+                        self.current_model_id = model["id"]
+                        break
+        
+        if self.current_model_id:
+            return self.switch_model(self.current_model_id)
+        else:
+            return {
+                "success": False,
+                "message": "No model currently running",
+                "timestamp": time.time()
+            }
+
+
+# Singleton instance
+_model_manager = None
+
+def get_model_manager(config_path: str = "config/models.yaml") -> LLMModelManager:
+    """Get singleton instance of model manager."""
+    global _model_manager
+    if _model_manager is None:
+        _model_manager = LLMModelManager(config_path)
+    return _model_manager

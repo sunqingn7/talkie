@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Talkie Voice Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-microphone-lines"></i>
+                    <span>Talkie</span>
+                </div>
+                <div class="status-indicator" id="system-status">
+                    <span class="status-dot offline"></span>
+                    <span class="status-text">Connecting...</span>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-view="chat">
+                    <i class="fas fa-comments"></i>
+                    <span>Chat</span>
+                </button>
+                <button class="nav-item" data-view="control">
+                    <i class="fas fa-sliders"></i>
+                    <span>Control Panel</span>
+                </button>
+                <button class="nav-item" data-view="settings">
+                    <i class="fas fa-cog"></i>
+                    <span>Settings</span>
+                </button>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="model-info">
+                    <div class="model-label">TTS Engine</div>
+                    <div class="model-value" id="current-tts-engine">Loading...</div>
+                </div>
+                <div class="model-info">
+                    <div class="model-label">LLM Model</div>
+                    <div class="model-value" id="current-llm-model">Loading...</div>
+                </div>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Chat View -->
+            <div class="view active" id="chat-view">
+                <div class="chat-header">
+                    <h2><i class="fas fa-comments"></i> Conversation</h2>
+                    <div class="chat-actions">
+                        <button class="btn-icon" id="clear-chat" title="Clear conversation">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                        <button class="btn-icon" id="voice-toggle" title="Voice output">
+                            <i class="fas fa-volume-high"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="chat-container">
+                    <div class="messages" id="messages">
+                        <div class="welcome-message">
+                            <div class="welcome-icon">
+                                <i class="fas fa-robot"></i>
+                            </div>
+                            <h3>Welcome to Talkie!</h3>
+                            <p>I'm your voice assistant. You can chat with me using text or voice.</p>
+                            <div class="quick-actions">
+                                <button class="quick-btn" data-message="What's the weather today?">
+                                    <i class="fas fa-cloud-sun"></i>
+                                    Check Weather
+                                </button>
+                                <button class="quick-btn" data-message="Tell me a joke">
+                                    <i class="fas fa-laugh-beam"></i>
+                                    Tell a Joke
+                                </button>
+                                <button class="quick-btn" data-message="What can you do?">
+                                    <i class="fas fa-wand-magic-sparkles"></i>
+                                    My Capabilities
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="thinking-indicator" id="thinking-indicator" style="display: none;">
+                        <div class="thinking-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <span>Thinking...</span>
+                    </div>
+                </div>
+                
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <button class="btn-voice" id="voice-input-btn" title="Voice input">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        <textarea 
+                            id="message-input" 
+                            placeholder="Type your message..." 
+                            rows="1"
+                            maxlength="1000"
+                        ></textarea>
+                        <button class="btn-send" id="send-btn" title="Send message">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <div class="input-hint">
+                        Press Enter to send, Shift+Enter for new line
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Control Panel View -->
+            <div class="view" id="control-view">
+                <div class="view-header">
+                    <h2><i class="fas fa-sliders"></i> Control Panel</h2>
+                </div>
+                
+                <div class="control-grid">
+                    <!-- LLM Model Selection -->
+                    <div class="control-card">
+                        <div class="card-header">
+                            <i class="fas fa-brain"></i>
+                            <h3>LLM Model</h3>
+                        </div>
+                        <div class="card-body">
+                            <p class="card-description">Select the AI model for conversations. Changing will restart the server.</p>
+                            <div class="server-status" id="llm-server-status" style="margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; font-size: 13px; background: rgba(239, 68, 68, 0.1); color: var(--error-color);">
+                                <i class="fas fa-circle"></i> Checking server status...
+                            </div>
+                            <div class="model-list" id="llm-model-list">
+                                <!-- LLM models will be populated here -->
+                            </div>
+                            <div class="model-actions" style="margin-top: 16px; display: flex; gap: 8px;">
+                                <button class="tool-btn" id="restart-llm-btn" style="flex: 1;">
+                                    <i class="fas fa-rotate"></i> Restart Server
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TTS Model Selection -->
+                    <div class="control-card">
+                        <div class="card-header">
+                            <i class="fas fa-language"></i>
+                            <h3>Text-to-Speech Model</h3>
+                        </div>
+                        <div class="card-body">
+                            <p class="card-description">Configure speech synthesis settings</p>
+                            
+                            <!-- TTS Engine Selector -->
+                            <div class="engine-section" style="margin-bottom: 24px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+                                        <i class="fas fa-microphone-alt" style="margin-right: 8px;"></i>TTS Engine
+                                    </h4>
+                                    <span id="current-engine-badge" style="font-size: 11px; padding: 2px 8px; background: var(--primary-color); border-radius: 12px; color: white;">Edge TTS</span>
+                                </div>
+                                <p class="card-description" style="font-size: 12px; margin-bottom: 12px;">Select the speech synthesis engine</p>
+                                 
+                                <div class="engine-selector-wrapper" style="position: relative; margin-bottom: 12px;">
+                                    <select id="tts-engine-select" 
+                                        onchange="if(window.talkieApp){window.talkieApp.switchTTSEngine(this.value)}" 
+                                        style="
+                                        width: 100%;
+                                        padding: 10px 36px 10px 12px;
+                                        border-radius: 8px;
+                                        border: 1px solid var(--border-color);
+                                        background: var(--bg-dark);
+                                        color: var(--text-primary);
+                                        font-size: 14px;
+                                        cursor: pointer;
+                                        appearance: none;
+                                        -webkit-appearance: none;
+                                        -moz-appearance: none;
+                                    ">
+                                        <option value="edge_tts">Edge TTS (Microsoft) - Online, High Quality</option>
+                                        <option value="coqui">Coqui TTS (Local) - XTTS Multilingual</option>
+                                        <option value="pyttsx3">pyttsx3 (Fallback) - Basic</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down" style="
+                                        position: absolute;
+                                        right: 12px;
+                                        top: 50%;
+                                        transform: translateY(-50%);
+                                        color: var(--text-secondary);
+                                        pointer-events: none;
+                                    "></i>
+                                </div>
+                                
+                                <p id="engine-description" style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                                    <i class="fas fa-info-circle" style="margin-right: 6px;"></i>
+                                    Uses Microsoft Edge online TTS service. Requires internet connection.
+                                </p>
+                                
+                                <!-- Debug buttons -->
+                                <div style="margin-top: 15px; display: flex; gap: 8px; flex-wrap: wrap;">
+                                    <button onclick="window.talkieApp && window.talkieApp.switchTTSEngine('edge_tts')" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Edge TTS</button>
+                                    <button onclick="window.talkieApp && window.talkieApp.switchTTSEngine('coqui')" style="padding: 6px 12px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Coqui</button>
+                                    <button onclick="window.talkieApp && window.talkieApp.testTTSSpeaker()" style="padding: 6px 12px; background: #f59e0b; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Test Voice</button>
+                                </div>
+                            </div>
+                            
+                            <!-- XTTS Model Selector (for Coqui) -->
+                            <div id="xtts-model-section" class="model-section" style="margin-bottom: 24px; padding-top: 20px; border-top: 1px solid var(--border-color); display: none;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+                                        <i class="fas fa-brain" style="margin-right: 8px;"></i>TTS Model
+                                    </h4>
+                                </div>
+                                <p class="card-description" style="font-size: 12px; margin-bottom: 12px;">Select local TTS model (Coqui only)</p>
+                                <div class="model-list" id="tts-model-list">
+                                    <!-- Models will be populated here -->
+                                </div>
+                            </div>
+                            
+                            <!-- Speaker/Persona Selector (for Coqui) -->
+                            <div class="speaker-section" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+                                        <i class="fas fa-user-voice" style="margin-right: 8px;"></i>Voice Persona
+                                    </h4>
+                                    <span id="speaker-count-badge" style="font-size: 11px; padding: 2px 8px; background: var(--bg-hover); border-radius: 12px; color: var(--text-muted);">0 voices</span>
+                                </div>
+                                <p class="card-description" style="font-size: 12px; margin-bottom: 12px;">Select a voice persona for the assistant</p>
+                                
+                                <!-- Dropdown Selector -->
+                                <div class="speaker-selector-wrapper" style="position: relative; margin-bottom: 12px;">
+                                    <select id="tts-speaker-select" 
+                                        onchange="if(window.talkieApp){window.talkieApp.switchTTSSpeaker && window.talkieApp.switchTTSSpeaker(this.value)}" 
+                                        style="
+                                        width: 100%;
+                                        padding: 10px 36px 10px 12px;
+                                        border-radius: 8px;
+                                        border: 1px solid var(--border-color);
+                                        background: var(--bg-dark);
+                                        color: var(--text-primary);
+                                        font-size: 14px;
+                                        cursor: pointer;
+                                        appearance: none;
+                                        -webkit-appearance: none;
+                                        -moz-appearance: none;
+                                    ">
+                                        <option value="">Loading speakers...</option>
+                                    </select>
+                                    <i class="fas fa-chevron-down" style="
+                                        position: absolute;
+                                        right: 12px;
+                                        top: 50%;
+                                        transform: translateY(-50%);
+                                        color: var(--text-secondary);
+                                        pointer-events: none;
+                                    "></i>
+                                </div>
+                                
+                                <div class="speaker-info" id="current-speaker-info" style="
+                                    padding: 10px 12px;
+                                    background: var(--bg-dark);
+                                    border-radius: 8px;
+                                    border: 1px solid var(--border-color);
+                                    margin-bottom: 12px;
+                                    display: none;
+                                ">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <div id="current-speaker-avatar" style="
+                                            width: 32px;
+                                            height: 32px;
+                                            border-radius: 50%;
+                                            background: var(--primary-color);
+                                            display: flex;
+                                            align-items: center;
+                                            justify-content: center;
+                                            color: white;
+                                            font-size: 12px;
+                                        ">
+                                            <i class="fas fa-user"></i>
+                                        </div>
+                                        <div style="flex: 1;">
+                                            <div id="current-speaker-name" style="font-weight: 500; font-size: 13px; color: var(--text-primary);">-</div>
+                                            <div style="font-size: 11px; color: var(--text-muted);">Currently Active</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <button class="tool-btn" id="test-speaker-btn" style="width: 100%;">
+                                    <i class="fas fa-play"></i> Test Selected Voice
+                                </button>
+                                
+                                <!-- Quick voice test buttons -->
+                                <div style="margin-top: 15px; display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <button onclick="window.talkieApp && window.talkieApp.switchEdgeVoice && window.talkieApp.switchEdgeVoice('en-US-AriaNeural'); window.talkieApp && window.talkieApp.testTTSSpeaker()" style="padding: 4px 8px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Aria Test</button>
+                                    <button onclick="window.talkieApp && window.talkieApp.switchEdgeVoice && window.talkieApp.switchEdgeVoice('en-US-GuyNeural'); window.talkieApp && window.talkieApp.testTTSSpeaker()" style="padding: 4px 8px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 11px;">Guy</button>
+                                    <button onclick="window.talkieApp && window.talkieApp.switchEdgeVoice && window.talkieApp.switchEdgeVoice('zh-CN-XiaoxiaoNeural'); window.talkieApp && window.talkieApp.testTTSSpeaker()" style="padding: 4px 8px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 11px;">Xiaoxiao</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- System Status -->
+                    <div class="control-card">
+                        <div class="card-header">
+                            <i class="fas fa-heart-pulse"></i>
+                            <h3>System Status</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="status-list" id="system-status-list">
+                                <div class="status-item">
+                                    <span class="status-label">MCP Server</span>
+                                    <span class="status-badge" id="mcp-status">Checking...</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">LLM Client</span>
+                                    <span class="status-badge" id="llm-status">Checking...</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Available Tools</span>
+                                    <span class="status-value" id="tools-count">-</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Conversation Count</span>
+                                    <span class="status-value" id="conversation-count">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Tools -->
+                    <div class="control-card">
+                        <div class="card-header">
+                            <i class="fas fa-toolbox"></i>
+                            <h3>Quick Tools</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="tool-buttons">
+                                <button class="tool-btn" id="test-tts-btn">
+                                    <i class="fas fa-volume-high"></i>
+                                    Test TTS
+                                </button>
+                                <button class="tool-btn" id="test-stt-btn">
+                                    <i class="fas fa-microphone"></i>
+                                    Test STT
+                                </button>
+                                <button class="tool-btn" id="check-weather-btn">
+                                    <i class="fas fa-cloud-sun"></i>
+                                    Check Weather
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Available Tools -->
+                    <div class="control-card wide">
+                        <div class="card-header">
+                            <i class="fas fa-puzzle-piece"></i>
+                            <h3>Available Tools</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="tools-grid" id="available-tools">
+                                <!-- Tools will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Settings View -->
+            <div class="view" id="settings-view">
+                <div class="view-header">
+                    <h2><i class="fas fa-cog"></i> Settings</h2>
+                </div>
+                
+                <div class="settings-container">
+                    <div class="settings-section">
+                        <h3>Audio Settings</h3>
+                        <div class="setting-item">
+                            <label>Voice Output</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="voice-output-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <label>Voice Input</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="voice-input-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3>Chat Settings</h3>
+                        <div class="setting-item">
+                            <label>Show Tool Call Details</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="show-tools-toggle">
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <label>Auto-scroll to Bottom</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="autoscroll-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3>Connection</h3>
+                        <div class="setting-item">
+                            <label>WebSocket Status</label>
+                            <span class="connection-status" id="connection-status">Disconnected</span>
+                        </div>
+                        <button class="btn-reconnect" id="reconnect-btn">
+                            <i class="fas fa-rotate"></i> Reconnect
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Voice Recording Modal -->
+    <div class="modal" id="voice-modal">
+        <div class="modal-content">
+            <div class="voice-recorder">
+                <div class="voice-wave">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <p class="voice-status">Listening...</p>
+                <button class="btn-stop-recording" id="stop-recording-btn">
+                    <i class="fas fa-stop"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
