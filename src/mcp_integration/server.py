@@ -36,6 +36,14 @@ class TalkieMCPServer:
         # The LLM won't see it in list_tools, but web interface can still call it
         from tools.tts_tool import TTSTool
         self.tools["speak"] = TTSTool(self.config)
+        
+        # Register TTS reader tools for reading files with paragraph-by-paragraph TTS
+        from tools.tts_reader_tool import TTSReaderTool, StopReadingTool
+        self.tools["read_file_aloud"] = TTSReaderTool(self.config)
+        self.tools["read_file_aloud"].set_tts_tool(self.tools["speak"])
+        
+        self.tools["stop_reading"] = StopReadingTool(self.config)
+        self.tools["stop_reading"].set_reader_tool(self.tools["read_file_aloud"])
             
         if "weather" in enabled:
             from tools.weather_tool import WeatherTool

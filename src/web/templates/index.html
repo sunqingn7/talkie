@@ -100,14 +100,24 @@
                     </div>
                 </div>
                 
+                <!-- Attachment Preview Area -->
+                <div class="attachments-preview" id="attachments-preview" style="display: none;">
+                    <!-- Attachment chips will be added here dynamically -->
+                </div>
+                
                 <div class="input-container">
                     <div class="input-wrapper">
+                        <button class="btn-attachment" id="attachment-btn" title="Attach file" onclick="console.log('Attachment button clicked inline'); document.getElementById('file-input').click();">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
+                        <input type="file" id="file-input" style="display: none;" multiple 
+                               accept=".txt,.md,.pdf,.epub,.csv,.json,.py,.js,.html,.mp3,.wav,.ogg,.mp4,.avi,.mov,.webm">
                         <button class="btn-voice" id="voice-input-btn" title="Voice input">
                             <i class="fas fa-microphone"></i>
                         </button>
                         <textarea 
                             id="message-input" 
-                            placeholder="Type your message..." 
+                            placeholder="Type your message or attach a file..." 
                             rows="1"
                             maxlength="1000"
                         ></textarea>
@@ -116,7 +126,7 @@
                         </button>
                     </div>
                     <div class="input-hint">
-                        Press Enter to send, Shift+Enter for new line
+                        Press Enter to send, Shift+Enter for new line • Drag & drop files here
                     </div>
                 </div>
             </div>

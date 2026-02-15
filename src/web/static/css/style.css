@@ -363,7 +363,7 @@ body {
 
 .input-wrapper {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 12px;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -376,23 +376,39 @@ body {
     border-color: var(--primary-color);
 }
 
-.btn-voice, .btn-send {
+.btn-voice, .btn-send, .btn-attachment {
     width: 40px;
     height: 40px;
     border-radius: 50%;
     border: none;
-    background: transparent;
+    background: transparent !important;
     color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 0;
+    margin: 0;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    vertical-align: middle;
+    line-height: 1;
+    pointer-events: auto;
+    box-shadow: none !important;
+    outline: none !important;
 }
 
-.btn-voice:hover {
-    background: var(--bg-hover);
+.btn-voice:hover, .btn-attachment:hover {
+    background: var(--bg-hover) !important;
     color: var(--primary-color);
+}
+
+.btn-attachment i, .btn-voice i, .btn-send i {
+    background: transparent !important;
+    color: inherit;
+    pointer-events: none;
 }
 
 .btn-send {
@@ -406,15 +422,17 @@ body {
 
 #message-input {
     flex: 1;
-    background: transparent;
+    background: transparent !important;
     border: none;
     color: var(--text-primary);
     font-size: 15px;
     resize: none;
     outline: none;
-    padding: 10px 0;
+    padding: 8px 0;
     max-height: 120px;
     font-family: inherit;
+    align-self: center;
+    line-height: 1.5;
 }
 
 .input-hint {
@@ -928,4 +946,138 @@ body {
     .control-grid {
         grid-template-columns: 1fr;
     }
+}
+
+/* File Attachment Styles */
+.btn-attachment.has-attachments {
+    color: var(--primary-color);
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.attachments-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(99, 102, 241, 0.15);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 20px;
+    font-size: 13px;
+    color: var(--text-primary);
+    animation: slideIn 0.2s ease-out;
+}
+
+.attachment-chip i {
+    color: var(--primary-color);
+    font-size: 14px;
+}
+
+.attachment-chip .remove-btn {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    transition: all 0.2s;
+}
+
+.attachment-chip .remove-btn:hover {
+    background: var(--error-color);
+    color: white;
+}
+
+.attachment-chip.uploading {
+    opacity: 0.7;
+}
+
+.attachment-chip.uploading::after {
+    content: '';
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--primary-color);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-left: 4px;
+}
+
+.attachment-chip.error {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.attachment-chip.error i {
+    color: var(--error-color);
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Drag and drop overlay */
+.drag-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(99, 102, 241, 0.2);
+    border: 3px dashed var(--primary-color);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.drag-overlay.active {
+    opacity: 1;
+}
+
+.drag-overlay-content {
+    text-align: center;
+    color: var(--primary-color);
+}
+
+.drag-overlay-content i {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.drag-overlay-content p {
+    font-size: 18px;
+    font-weight: 500;
 }

@@ -7,12 +7,13 @@ import asyncio
 import json
 import sys
 import os
+import tempfile
 from typing import Dict, List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -22,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from mcp_integration.server import TalkieMCPServer
 from core.llm_client import LLMClient
 from core.model_manager import get_model_manager
+from tools.file_attachment_tool import FileAttachmentTool
 import yaml
 
 class ConnectionManager:
@@ -55,6 +57,8 @@ class WebTalkieInterface:
         self.conversation_history: List[dict] = []
         self.manager = ConnectionManager()
         self.model_manager = get_model_manager("config/models.yaml")
+        self.file_attachment_tool = None
+        self.pending_attachments: List[dict] = []  # Store uploaded files waiting to be attached
         
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -86,9 +90,66 @@ class WebTalkieInterface:
         # Initialize LLM client - pass config_path
         self.llm_client = LLMClient(config_path)
         
+        # Initialize file attachment tool
+        upload_config = self.config.get('upload', {})
+        upload_config['upload_dir'] = upload_config.get('upload_dir', os.path.join(tempfile.gettempdir(), 'talkie_uploads'))
+        self.file_attachment_tool = FileAttachmentTool(upload_config)
+        
         print("✅ Web interface ready!")
         
-    async def process_message(self, user_message: str) -> dict:
+    async def upload_file(self, file_content: bytes, filename: str, transcribe: bool = True) -> dict:
+        """Upload and process a file, returning file info for attachment."""
+        if not self.file_attachment_tool:
+            return {
+                "success": False,
+                "error": "File attachment tool not initialized",
+                "filename": filename
+            }
+        
+        try:
+            # Process the uploaded file
+            result = await self.file_attachment_tool.process_upload(
+                file_content, filename, transcribe
+            )
+            
+            if result.get("success"):
+                # Store as pending attachment
+                attachment_info = {
+                    "filename": filename,
+                    "file_type": result["metadata"]["file_type"],
+                    "content": result.get("content", ""),
+                    "saved_path": result.get("saved_path"),
+                    "size": result["metadata"]["size_bytes"],
+                    "uploaded_at": datetime.now().isoformat()
+                }
+                self.pending_attachments.append(attachment_info)
+                
+                # Limit pending attachments to avoid memory issues
+                if len(self.pending_attachments) > 10:
+                    self.pending_attachments = self.pending_attachments[-10:]
+                
+                return {
+                    "success": True,
+                    "filename": filename,
+                    "file_type": result["metadata"]["file_type"],
+                    "content_preview": result.get("content", "")[:500] + "..." if len(result.get("content", "")) > 500 else result.get("content", ""),
+                    "attachment_id": len(self.pending_attachments) - 1
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("error", "Unknown error"),
+                    "filename": filename
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Upload failed: {str(e)}",
+                "filename": filename
+            }
+    
+    async def process_message(self, user_message: str, attachment_ids: Optional[List[int]] = None) -> dict:
         """Process a user message and return response."""
         if not self.mcp_server or not self.llm_client:
             return {
@@ -100,6 +161,56 @@ class WebTalkieInterface:
         try:
             # Build context messages
             messages = self._build_context_messages(user_message)
+            
+            # Check if user is asking to read the file aloud
+            user_wants_reading = any(keyword in user_message.lower() for keyword in 
+                                     ['read', 'read aloud', 'read this', 'read it', 'speak', 'narrate'])
+            
+            # Add attachment content to the last user message if attachments are specified
+            if attachment_ids and self.pending_attachments:
+                attachment_content = []
+                for idx in attachment_ids:
+                    if 0 <= idx < len(self.pending_attachments):
+                        attachment = self.pending_attachments[idx]
+                        
+                        # Check if user is asking to read this file
+                        is_reading_request = user_wants_reading and idx == attachment_ids[0]
+                        
+                        if is_reading_request:
+                            # For reading requests, only show file info, not full content in chat
+                            file_info = f"\n\n[File attached: {attachment['filename']} ({attachment['file_type']})]\n"
+                            file_info += f"The file content is available for reading. User wants me to read it aloud."
+                            # Store full content for the tool but don't display it
+                            attachment_content.append(file_info)
+                            # Add content in a way that's only visible to LLM, not in chat display
+                            attachment['_full_content'] = attachment.get('content', '')
+                        else:
+                            # For analysis/summary requests, include content normally
+                            file_info = f"\n\n--- Attached File: {attachment['filename']} ---\n"
+                            file_info += f"Type: {attachment['file_type']}\n"
+                            if attachment.get('content'):
+                                file_info += f"Content:\n{attachment['content'][:8000]}"
+                                if len(attachment['content']) > 8000:
+                                    file_info += "\n[Content truncated for length]"
+                            attachment_content.append(file_info)
+                
+                if attachment_content:
+                    # Append attachment content to the last user message
+                    last_message = messages[-1]
+                    if last_message["role"] == "user":
+                        last_message["content"] += "\n\n" + "\n".join(attachment_content)
+                        
+                        # If reading was requested, add content as a system message for LLM only
+                        if user_wants_reading and self.pending_attachments:
+                            for idx in attachment_ids:
+                                if 0 <= idx < len(self.pending_attachments):
+                                    attachment = self.pending_attachments[idx]
+                                    if attachment.get('_full_content'):
+                                        # Insert before last message (so LLM sees it but it's not in visible chat)
+                                        messages.insert(-1, {
+                                            "role": "system",
+                                            "content": f"Full content of {attachment['filename']}:\n{attachment['_full_content'][:10000]}"
+                                        })
             
             # Format tools for LLM - exclude 'speak' tool as web interface handles TTS
             tools_dict = {k: v for k, v in self.mcp_server.tools.items() if k != 'speak'}
@@ -123,6 +234,28 @@ class WebTalkieInterface:
             if tool_calls:
                 return await self._handle_tool_calls(tool_calls, messages, user_message)
             elif content:
+                # Check if user wanted reading but LLM only responded with text (no tool call)
+                # This can happen if LLM generates acknowledgment but forgets to call the tool
+                if user_wants_reading and attachment_ids and self.pending_attachments:
+                    # Check if LLM response indicates reading intent
+                    reading_acknowledged = any(phrase in content.lower() for phrase in 
+                                               ['read this', 'reading', 'will read', 'start reading', 
+                                                'narrate', 'speak aloud', 'read it'])
+                    if reading_acknowledged:
+                        # Auto-trigger reading with the first attachment
+                        first_attachment = self.pending_attachments[attachment_ids[0]]
+                        if first_attachment.get('_full_content') or first_attachment.get('content'):
+                            # Start reading in background
+                            reading_content = first_attachment.get('_full_content') or first_attachment.get('content')
+                            if reading_content:
+                                asyncio.create_task(self.read_file_aloud(
+                                    content=reading_content,
+                                    start_paragraph=1,
+                                    language="auto"
+                                ))
+                            # Update the content to indicate reading has started
+                            content += "\n\n📖 *Reading started... Say 'stop reading' to pause.*"
+                
                 # Update conversation history
                 self._add_to_history(user_message, content)
                 
@@ -697,6 +830,102 @@ class WebTalkieInterface:
                 "message": f"TTS failed: {str(e)}",
                 "timestamp": datetime.now().isoformat()
             }
+    
+    async def read_file_aloud(self, content: str = None, file_path: str = None, start_paragraph: int = 1, language: str = "auto") -> dict:
+        """Read file content aloud with paragraph-by-paragraph TTS."""
+        try:
+            if self.mcp_server and 'read_file_aloud' in self.mcp_server.tools:
+                reader_tool = self.mcp_server.tools['read_file_aloud']
+                result = await reader_tool.execute(
+                    content=content,
+                    file_path=file_path,
+                    start_paragraph=start_paragraph,
+                    language=language
+                )
+                
+                return {
+                    "type": "reading_started",
+                    "success": result.get('success', False),
+                    "message": result.get('message', ''),
+                    "preview": result.get('preview', ''),
+                    "total_paragraphs": result.get('total_paragraphs', 0),
+                    "instruction": result.get('instruction', ''),
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": "File reader tool not available",
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to start reading: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    async def stop_reading(self) -> dict:
+        """Stop the current file reading session."""
+        try:
+            if self.mcp_server and 'stop_reading' in self.mcp_server.tools:
+                stop_tool = self.mcp_server.tools['stop_reading']
+                result = await stop_tool.execute()
+                
+                return {
+                    "type": "reading_stopped",
+                    "success": result.get('success', False),
+                    "message": result.get('message', ''),
+                    "paragraphs_read": result.get('paragraphs_read', 0),
+                    "total_paragraphs": result.get('total_paragraphs', 0),
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "type": "error",
+                    "success": False,
+                    "message": "Stop reading tool not available",
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to stop reading: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def get_reading_status(self) -> dict:
+        """Get current reading status."""
+        try:
+            if self.mcp_server and 'read_file_aloud' in self.mcp_server.tools:
+                reader_tool = self.mcp_server.tools['read_file_aloud']
+                status = reader_tool.get_reading_status()
+                
+                return {
+                    "type": "reading_status",
+                    "is_reading": status.get('is_reading', False),
+                    "current_paragraph": status.get('current_paragraph', 0),
+                    "total_paragraphs": status.get('total_paragraphs', 0),
+                    "progress_percent": status.get('progress_percent', 0),
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "type": "reading_status",
+                    "is_reading": False,
+                    "message": "Reader tool not available",
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to get reading status: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
 
 
 # Create global interface instance
@@ -745,6 +974,54 @@ async def get_status():
 async def get_models():
     """Get available models."""
     return web_interface.get_available_models()
+
+
+@app.post("/api/upload")
+async def upload_file_endpoint(
+    file: UploadFile = File(...),
+    transcribe: bool = Form(True)
+):
+    """Upload a file for attachment."""
+    try:
+        content = await file.read()
+        filename = file.filename or "unknown_file"
+        result = await web_interface.upload_file(content, filename, transcribe)
+        return JSONResponse(content=result)
+    except Exception as e:
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
+
+
+@app.get("/api/attachments")
+async def get_attachments():
+    """Get list of pending attachments."""
+    return {
+        "attachments": [
+            {
+                "id": i,
+                "filename": att["filename"],
+                "file_type": att["file_type"],
+                "size": att["size"],
+                "uploaded_at": att["uploaded_at"]
+            }
+            for i, att in enumerate(web_interface.pending_attachments)
+        ]
+    }
+
+
+@app.delete("/api/attachments/{attachment_id}")
+async def delete_attachment(attachment_id: int):
+    """Delete a pending attachment."""
+    try:
+        if 0 <= attachment_id < len(web_interface.pending_attachments):
+            web_interface.pending_attachments.pop(attachment_id)
+            return {"success": True, "message": "Attachment removed"}
+        else:
+            return {"success": False, "error": "Invalid attachment ID"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/api/switch-model")
@@ -841,6 +1118,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             if message_type == "user_message":
                 content = data.get("content", "")
+                attachment_ids = data.get("attachment_ids", [])  # Get attachment IDs from frontend
                 
                 # Send thinking indicator
                 await websocket.send_json({
@@ -848,8 +1126,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "timestamp": datetime.now().isoformat()
                 })
                 
-                # Process message
-                response = await web_interface.process_message(content)
+                # Process message with attachments
+                response = await web_interface.process_message(content, attachment_ids)
                 await websocket.send_json(response)
                 
             elif message_type == "get_status":
@@ -903,6 +1181,28 @@ async def websocket_endpoint(websocket: WebSocket):
                 if text:
                     result = await web_interface.speak_assistant_response(text)
                     await websocket.send_json(result)
+            
+            elif message_type == "read_file_aloud":
+                content = data.get("content", "")
+                file_path = data.get("file_path", "")
+                start_paragraph = data.get("start_paragraph", 1)
+                language = data.get("language", "auto")
+                
+                if content or file_path:
+                    result = await web_interface.read_file_aloud(
+                        content=content,
+                        file_path=file_path,
+                        start_paragraph=start_paragraph,
+                        language=language
+                    )
+                    await websocket.send_json(result)
+            
+            elif message_type == "stop_reading":
+                result = await web_interface.stop_reading()
+                await websocket.send_json(result)
+            
+            elif message_type == "get_reading_status":
+                await websocket.send_json(web_interface.get_reading_status())
             
             elif message_type == "get_llm_status":
                 await websocket.send_json(web_interface.get_llm_status())

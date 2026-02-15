@@ -14,6 +14,7 @@ class TalkieApp {
         this.autoscrollEnabled = true;
         this.showToolDetails = false;
         this.currentModels = null;
+        this.attachments = []; // Store uploaded file info
         
         this.init();
     }
@@ -97,6 +98,242 @@ class TalkieApp {
         document.getElementById('test-speaker-btn')?.addEventListener('click', () => {
             this.testTTSSpeaker();
         });
+        
+        // File attachment handlers
+        this.setupFileUploadHandlers();
+    }
+    
+    setupFileUploadHandlers() {
+        // Use setTimeout to ensure DOM is fully rendered
+        setTimeout(() => {
+            const fileInput = document.getElementById('file-input');
+            const attachmentBtn = document.getElementById('attachment-btn');
+            const chatView = document.getElementById('chat-view');
+            
+            console.log('Setting up file upload handlers:', {
+                fileInput: !!fileInput,
+                attachmentBtn: !!attachmentBtn,
+                chatView: !!chatView
+            });
+            
+            // Button click to select file
+            if (attachmentBtn && fileInput) {
+                attachmentBtn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('Attachment button clicked');
+                    fileInput.click();
+                    return false;
+                };
+                console.log('Attachment button onclick set successfully');
+            } else {
+                console.error('Attachment button or file input not found:', {
+                    attachmentBtn: !!attachmentBtn,
+                    fileInput: !!fileInput
+                });
+            }
+            
+            // File input change
+            if (fileInput) {
+                fileInput.onchange = (e) => {
+                    this.handleFiles(e.target.files);
+                    fileInput.value = ''; // Reset input
+                };
+            }
+            
+            // Drag and drop support
+            if (chatView) {
+                chatView.ondragover = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    chatView.classList.add('drag-active');
+                };
+                
+                chatView.ondragleave = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    chatView.classList.remove('drag-active');
+                };
+                
+                chatView.ondrop = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    chatView.classList.remove('drag-active');
+                    this.handleFiles(e.dataTransfer.files);
+                };
+            }
+        }, 100);
+    }
+    
+    async handleFiles(files) {
+        for (const file of files) {
+            await this.uploadFile(file);
+        }
+    }
+    
+    async uploadFile(file) {
+        // Add pending attachment UI
+        const attachmentId = this.attachments.length;
+        const attachment = {
+            id: attachmentId,
+            filename: file.name,
+            fileType: this.getFileType(file.name),
+            status: 'uploading',
+            content: null
+        };
+        this.attachments.push(attachment);
+        this.renderAttachmentChip(attachment);
+        
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('transcribe', 'true');
+            
+            const response = await fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                attachment.status = 'ready';
+                attachment.attachmentId = result.attachment_id;
+                attachment.content = result.content_preview;
+                this.updateAttachmentChip(attachment);
+                this.showNotification(`File uploaded: ${file.name}`, 'success');
+            } else {
+                attachment.status = 'error';
+                attachment.error = result.error;
+                this.updateAttachmentChip(attachment);
+                this.showNotification(`Upload failed: ${result.error}`, 'error');
+            }
+        } catch (error) {
+            attachment.status = 'error';
+            attachment.error = error.message;
+            this.updateAttachmentChip(attachment);
+            this.showNotification(`Upload error: ${error.message}`, 'error');
+        }
+    }
+    
+    getFileType(filename) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const textExts = ['txt', 'md', 'markdown', 'csv', 'json', 'xml', 'yaml', 'yml', 
+                         'py', 'js', 'ts', 'html', 'htm', 'css', 'sh', 'bash',
+                         'c', 'cpp', 'h', 'hpp', 'java', 'kt', 'go', 'rs',
+                         'rb', 'php', 'swift', 'sql', 'log', 'ini', 'conf'];
+        const audioExts = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'wma'];
+        const videoExts = ['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv', 'm4v'];
+        
+        if (ext === 'pdf') return 'pdf';
+        if (ext === 'epub') return 'epub';
+        if (textExts.includes(ext)) return 'text';
+        if (audioExts.includes(ext)) return 'audio';
+        if (videoExts.includes(ext)) return 'video';
+        return 'file';
+    }
+    
+    getFileIcon(fileType) {
+        const icons = {
+            'pdf': 'fa-file-pdf',
+            'epub': 'fa-book',
+            'text': 'fa-file-lines',
+            'audio': 'fa-file-audio',
+            'video': 'fa-file-video',
+            'file': 'fa-file'
+        };
+        return icons[fileType] || 'fa-file';
+    }
+    
+    renderAttachmentChip(attachment) {
+        const previewContainer = document.getElementById('attachments-preview');
+        if (!previewContainer) return;
+        
+        previewContainer.style.display = 'flex';
+        
+        const chip = document.createElement('div');
+        chip.className = `attachment-chip ${attachment.status}`;
+        chip.id = `attachment-${attachment.id}`;
+        chip.innerHTML = `
+            <i class="fas ${this.getFileIcon(attachment.fileType)}"></i>
+            <span class="filename">${attachment.filename}</span>
+            <button class="remove-btn" data-attachment-id="${attachment.id}" title="Remove">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        
+        // Attach event listener to remove button
+        const removeBtn = chip.querySelector('.remove-btn');
+        removeBtn.addEventListener('click', () => this.removeAttachment(attachment.id));
+        
+        previewContainer.appendChild(chip);
+        
+        // Update attachment button state
+        const btn = document.getElementById('attachment-btn');
+        if (btn && this.attachments.some(a => a && a.status === 'ready')) {
+            btn.classList.add('has-attachments');
+        }
+    }
+    
+    updateAttachmentChip(attachment) {
+        const chip = document.getElementById(`attachment-${attachment.id}`);
+        if (!chip) return;
+        
+        chip.className = `attachment-chip ${attachment.status}`;
+        
+        if (attachment.status === 'error') {
+            chip.title = `Error: ${attachment.error}`;
+        }
+        
+        // Update button state
+        const btn = document.getElementById('attachment-btn');
+        if (btn) {
+            if (this.attachments.some(a => a && a.status === 'ready')) {
+                btn.classList.add('has-attachments');
+            } else {
+                btn.classList.remove('has-attachments');
+            }
+        }
+    }
+    
+    removeAttachment(id) {
+        const attachment = this.attachments[id];
+        if (!attachment) return;
+        
+        // Remove from array
+        this.attachments[id] = null;
+        
+        // Remove from UI
+        const chip = document.getElementById(`attachment-${id}`);
+        if (chip) {
+            chip.remove();
+        }
+        
+        // Hide container if no attachments left
+        const previewContainer = document.getElementById('attachments-preview');
+        if (previewContainer && !this.attachments.some(a => a && a.status === 'ready')) {
+            previewContainer.style.display = 'none';
+            previewContainer.innerHTML = '';
+        }
+        
+        // Update button state
+        const btn = document.getElementById('attachment-btn');
+        if (btn) {
+            btn.classList.remove('has-attachments');
+        }
+    }
+    
+    clearAttachments() {
+        this.attachments = [];
+        const previewContainer = document.getElementById('attachments-preview');
+        if (previewContainer) {
+            previewContainer.innerHTML = '';
+            previewContainer.style.display = 'none';
+        }
+        const btn = document.getElementById('attachment-btn');
+        if (btn) {
+            btn.classList.remove('has-attachments');
+        }
     }
     
     updateEngineUI(engine) {
@@ -386,23 +623,39 @@ class TalkieApp {
     sendMessage() {
         const input = document.getElementById('message-input');
         const message = input.value.trim();
+        const readyAttachments = this.attachments.filter(a => a && a.status === 'ready');
         
-        if (!message || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        // Allow sending with just attachments even if no text
+        if ((!message && readyAttachments.length === 0) || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return;
         }
         
-        // Add user message to chat
-        this.addUserMessage(message);
+        // Add user message to chat (with file indicator)
+        let displayMessage = message;
+        if (readyAttachments.length > 0) {
+            const fileNames = readyAttachments.map(a => a.filename).join(', ');
+            if (displayMessage) {
+                displayMessage += `\n[Attached: ${fileNames}]`;
+            } else {
+                displayMessage = `[Attached: ${fileNames}]`;
+            }
+        }
+        this.addUserMessage(displayMessage);
+        
+        // Get attachment IDs for the server
+        const attachmentIds = readyAttachments.map(a => a.attachmentId);
         
         // Send to server
         this.ws.send(JSON.stringify({
             type: 'user_message',
-            content: message
+            content: message,
+            attachment_ids: attachmentIds
         }));
         
-        // Clear input
+        // Clear input and attachments
         input.value = '';
         this.adjustTextareaHeight();
+        this.clearAttachments();
     }
     
     sendSystemMessage(type, data = {}) {
