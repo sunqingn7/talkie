@@ -395,7 +395,7 @@ class WebTalkieInterface:
             reading_intent_phrases = ['read this', 'will read', 'start reading',
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
-            # Check for both old and new reading tools
+            # Check for reading tools
             has_called_read_tool = any(tr["tool"] in ["read_file_aloud", "read_file_chunk"] for tr in tool_results)
             has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
             has_stop_reading = any(tr["tool"] in ["stop_reading", "stop_file_reading"] for tr in tool_results)
@@ -404,32 +404,41 @@ class WebTalkieInterface:
             print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}")
             print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
 
-            # If LLM fetched attachment content but didn't call read_file_aloud, auto-trigger reading
-            if has_fetched_attachment and not has_called_read_tool and not has_stop_reading:
-                print(f"[Auto Read] LLM fetched attachment but didn't call read_file_aloud. Auto-triggering...")
-                # Get the content from the tool result
+            # If LLM expressed reading intent but didn't call the tool, auto-trigger
+            if has_reading_intent and not has_called_read_tool and not has_stop_reading:
+                print(f"[Auto Read] LLM indicated reading intent but didn't call tool. Auto-triggering...")
+
+                # Try to get content from attachment tool result first
                 attachment_tool_result = next((tr for tr in tool_results if tr["tool"] == "get_attachment_content"), None)
+                content = None
+                filename = "the file"
+
                 if attachment_tool_result:
                     try:
                         result_data = json.loads(attachment_tool_result["result"])
-                        print(f"[Auto Read] Debug: attachment result keys={result_data.keys() if isinstance(result_data, dict) else 'not dict'}")
                         if result_data.get("success") and result_data.get("content"):
                             content = result_data["content"]
                             filename = result_data.get("attachment", {}).get("filename", "the file")
-                            print(f"[Auto Read] Auto-reading fetched file: {filename} (content length: {len(content)})")
-                            asyncio.create_task(self.read_file_aloud(
-                                content=content,
-                                start_paragraph=1,
-                                language="auto"
-                            ))
-                            final_content += f"\n\n📖 *Now reading {filename}... Say 'stop reading' to pause.*"
-                            has_called_read_tool = True  # Mark as called for skip_voice
-                        else:
-                            print(f"[Auto Read] Debug: attachment result success={result_data.get('success')}, has_content={bool(result_data.get('content'))}")
-                    except Exception as e:
-                        print(f"[Auto Read] Failed to parse/process attachment result: {e}")
-                        import traceback
-                        traceback.print_exc()
+                    except:
+                        pass
+
+                # If no content from tool, try session memory
+                if not content:
+                    recent_attachments = self.session_memory.get_recent_attachments(1)
+                    if recent_attachments:
+                        content = self.session_memory.get_attachment_content(recent_attachments[0]['id'])
+                        filename = recent_attachments[0]['filename']
+
+                if content:
+                    print(f"[Auto Read] Auto-reading: {filename} (content length: {len(content)})")
+                    # Call read_file_chunk tool directly via MCP server
+                    if self.mcp_server and "read_file_chunk" in self.mcp_server.tools:
+                        tool = self.mcp_server.tools["read_file_chunk"]
+                        asyncio.create_task(tool.execute())
+                        final_content += f"\n\n📖 *Reading {filename}... Say 'stop' to stop.*"
+                        has_called_read_tool = True
+                else:
+                    print(f"[Auto Read] No content found to read")
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
             elif has_reading_intent and not has_called_read_tool and not has_stop_reading:
@@ -495,32 +504,32 @@ class WebTalkieInterface:
         # Add memory and file reading information
         memory_info = """
 MEMORY & FILE READING:
-You have access to session memory tools and a new chunk-based file reading system:
+You have access to session memory tools and file reading system:
 
 MEMORY TOOLS:
-1. search_session_memory - Search chat history by keywords
+1. search_session_memory - Search chat history
 2. get_recent_attachments - List recently uploaded files
 3. get_attachment_content - Get full content of a file
 4. get_session_context - Get overview of session
 5. get_last_user_request - Get user's previous request
 
-FILE READING TOOLS (NEW CHUNK-BASED SYSTEM):
-- read_file_chunk - Read ~100 words at a time. Call repeatedly to continue reading.
+FILE READING TOOLS:
+- read_file_chunk - Start reading the file aloud (continues automatically in background)
 - stop_file_reading - Stop the current reading session
 
-HOW TO READ A FILE ALOUD:
+HOW TO READ A FILE ALOUD (IMPORTANT):
 1. User says "read the file" or similar
-2. Call read_file_chunk tool (no parameters needed - it auto-loads the most recent file)
-3. The tool will speak ~100 words and return status
-4. If more_content=true, call read_file_chunk again to continue
-5. If user says "stop", simply DON'T call read_file_chunk again
-6. Use stop_file_reading tool to explicitly stop
+2. Call read_file_chunk tool ONCE (no parameters needed)
+3. The tool will read the ENTIRE file automatically in background
+4. DO NOT ask "would you like me to continue?" - it continues automatically!
+5. User can say "stop" anytime to stop
 
-IMPORTANT:
-- Each call to read_file_chunk reads ONE chunk (~100 words)
-- Check the "more_content" in the response to know if there's more
-- To stop: just stop calling the tool (natural stopping!)
-- Don't queue multiple reads - let each chunk finish before calling again
+CRITICAL RULES:
+- Just call read_file_chunk ONCE - it handles everything automatically
+- DON'T output file content as text - let the TTS tool handle it
+- DON'T ask if user wants to continue - it continues automatically
+- The tool will speak all chunks until finished or user stops
+- If user says "stop", call stop_file_reading tool
 """
 
         full_system_prompt = f"{system_prompt}\n\n{memory_info}" if system_prompt else memory_info
