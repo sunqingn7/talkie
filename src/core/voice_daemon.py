@@ -195,18 +195,28 @@ class VoiceDaemon:
             
             # Execute TTS in the event loop
             print(f"[VoiceDaemon] Executing TTS for: {short_text}")
-            future = asyncio.run_coroutine_threadsafe(
-                self.tts_tool.execute(
-                    text=request.text,
-                    language=request.language,
-                    speaker_id=request.speaker_id,
-                    speed=request.speed
-                ),
-                loop
-            )
+            print(f"[VoiceDaemon] About to call run_coroutine_threadsafe...")
+            
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.tts_tool.execute(
+                        text=request.text,
+                        language=request.language,
+                        speaker_id=request.speaker_id,
+                        speed=request.speed
+                    ),
+                    loop
+                )
+                print(f"[VoiceDaemon] Future created, waiting for result...")
+            except Exception as e:
+                print(f"[VoiceDaemon] Error creating future: {e}")
+                import traceback
+                traceback.print_exc()
+                return
 
             # Wait for TTS to complete (with timeout)
             try:
+                print(f"[VoiceDaemon] Calling future.result() with 180s timeout...")
                 result = future.result(timeout=180)  # 3 minute timeout
                 print(f"[VoiceDaemon] TTS result: success={result.get('success')}, error={result.get('error', 'None')}")
                 if result.get('success'):
@@ -218,7 +228,7 @@ class VoiceDaemon:
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
             except Exception as e:
-                print(f"[VoiceDaemon] TTS error: {e}")
+                print(f"[VoiceDaemon] TTS error during execution: {e}")
                 import traceback
                 traceback.print_exc()
         
