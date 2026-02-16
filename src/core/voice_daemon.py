@@ -395,9 +395,13 @@ class VoiceDaemon:
     def stop_current(self) -> Dict[str, Any]:
         """Stop the current speech and clear the queue."""
         was_speaking = self.is_speaking
+        queue_size_before = self.speech_queue.qsize()
+        
+        print(f"[VoiceDaemon] stop_current called. is_speaking={was_speaking}, queue_size={queue_size_before}")
         
         # Signal stop to interrupt ongoing speech/sleep
         self.stop_event.set()
+        print(f"[VoiceDaemon] stop_event set")
         
         # Clear queue
         cleared_count = 0
@@ -409,6 +413,7 @@ class VoiceDaemon:
                 break
         
         self.queue_size = 0
+        print(f"[VoiceDaemon] Queue cleared: {cleared_count} items removed")
         
         # Reset stop event after a short delay to allow processing to stop
         # The daemon loop will clear it after processing the stop
