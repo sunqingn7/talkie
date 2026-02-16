@@ -392,14 +392,14 @@ class WebTalkieInterface:
             final_content = final_response["choices"][0]["message"].get("content", "")
             
             # Check if reading-related tools were called or intent was expressed
-            reading_intent_phrases = ['read this', 'reading', 'will read', 'start reading', 
+            reading_intent_phrases = ['read this', 'reading', 'will read', 'start reading',
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
             has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
-            
-            # If read_file_aloud was called but LLM didn't acknowledge it, add acknowledgment
-            if has_called_read_tool and not has_reading_intent:
-                print(f"[Auto Read] LLM indicated reading intent but didn't call read_file_aloud. Auto-triggering...")
+
+            # If LLM expressed reading intent but didn't call the tool, auto-trigger reading
+            if has_reading_intent and not has_called_read_tool:
+                print(f"[Auto Read] LLM said it will read but didn't call read_file_aloud. Auto-triggering...")
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
                 if recent_attachments:
@@ -413,6 +413,11 @@ class WebTalkieInterface:
                             language="auto"
                         ))
                         final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
+
+            # If LLM called the tool but didn't say anything about reading, add a note
+            if has_called_read_tool and not has_reading_intent:
+                print(f"[Auto Read] Tool was called but LLM didn't acknowledge. Adding note...")
+                final_content += "\n\n📖 *Reading the file now... Say 'stop reading' to pause.*"
             
             self._add_to_history(original_input, final_content, tool_results)
             
