@@ -342,11 +342,17 @@ class WebTalkieInterface:
     async def _handle_tool_calls(self, tool_calls: list, messages: list, original_input: str) -> dict:
         """Execute tool calls and return final response."""
         tool_results = []
-        
+
+        print(f"[Tool Calls] Processing {len(tool_calls)} tool call(s):")
+        for i, tc in enumerate(tool_calls, 1):
+            print(f"  {i}. {tc['function']['name']}")
+
         for tool_call in tool_calls:
             tool_name = tool_call["function"]["name"]
             tool_args = json.loads(tool_call["function"]["arguments"])
-            
+
+            print(f"[Tool Call] Executing: {tool_name}({json.dumps(tool_args)[:100]}...)")
+
             try:
                 result = await self.mcp_server.call_tool(tool_name, tool_args)
                 result_text = result[0].text if result else "{}"
