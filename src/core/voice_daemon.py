@@ -9,6 +9,7 @@ The daemon runs in a separate thread and processes the queue continuously.
 """
 
 import asyncio
+import subprocess
 import threading
 import queue
 import time
@@ -61,11 +62,12 @@ class VoiceDaemon:
         self.is_running = False
         self.stop_event = threading.Event()
         self.current_speech_event = threading.Event()
-        
+
         # Status tracking
         self.is_speaking = False
         self.current_text = ""
         self.queue_size = 0
+        self.current_audio_process: Optional[subprocess.Popen] = None  # Track current playing audio
         self.stats = {
             "total_speeches": 0,
             "high_priority": 0,
@@ -241,6 +243,10 @@ class VoiceDaemon:
                     audio_process = result.get('audio_process')
                     
                     if audio_process:
+                        # Store in daemon for stop tracking (CRITICAL for immediate stop)
+                        self.current_audio_process = audio_process
+                        print(f"[VoiceDaemon] Stored audio process PID {audio_process.pid} in daemon")
+                        
                         # Wait for actual audio playback to finish
                         print(f"[VoiceDaemon] Waiting for audio to finish (process PID {audio_process.pid})")
                         while audio_process.poll() is None:
@@ -281,6 +287,7 @@ class VoiceDaemon:
         finally:
             self.is_speaking = False
             self.current_text = ""
+            self.current_audio_process = None  # Clear the audio process reference
             
             # Trigger callback
             if self.on_speech_end:
@@ -423,14 +430,30 @@ class VoiceDaemon:
         self.stop_event.set()
         print(f"[VoiceDaemon] stop_event set")
 
-        # Also stop audio playback if TTS tool has stop_audio method
+        # CRITICAL: Directly stop the currently playing audio process
+        # This is more reliable than delegating to TTS tool which might track wrong process
+        if self.current_audio_process and self.current_audio_process.poll() is None:
+            try:
+                pid = self.current_audio_process.pid
+                print(f"[VoiceDaemon] Directly terminating audio process PID {pid}")
+                self.current_audio_process.terminate()
+                try:
+                    self.current_audio_process.wait(timeout=0.5)
+                except:
+                    self.current_audio_process.kill()
+                    self.current_audio_process.wait(timeout=0.5)
+                print(f"[VoiceDaemon] Audio process PID {pid} terminated")
+            except Exception as e:
+                print(f"[VoiceDaemon] Error terminating audio process: {e}")
+            finally:
+                self.current_audio_process = None
+        
+        # Also try TTS tool stop as backup
         if self.tts_tool and hasattr(self.tts_tool, 'stop_audio'):
             try:
-                stopped = self.tts_tool.stop_audio()
-                if stopped:
-                    print(f"[VoiceDaemon] Audio playback stopped via TTS tool")
+                self.tts_tool.stop_audio()
             except Exception as e:
-                print(f"[VoiceDaemon] Error stopping audio via TTS tool: {e}")
+                print(f"[VoiceDaemon] Error in TTS tool stop_audio: {e}")
 
         # Clear queue
         cleared_count = 0
