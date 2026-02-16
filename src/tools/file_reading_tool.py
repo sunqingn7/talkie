@@ -6,24 +6,21 @@ natural stopping by simply not calling the tool again.
 """
 
 import asyncio
+import threading
+import time
 from typing import Any, Dict, Optional
 from . import BaseTool
 
 
 class FileReadingTool(BaseTool):
     """
-    Read a file chunk by chunk with explicit LLM control.
+    Read a file chunk by chunk with automatic background reading.
     
-    Unlike the old read_file_aloud which queued everything at once,
-    this tool reads ONE chunk per call, giving the LLM control over:
-    - When to start reading
-    - How fast to progress (chunk by chunk)
-    - When to stop (simply don't call again)
-    
-    Usage:
-    1. First call: Automatically loads the most recent file
-    2. Subsequent calls: Continue from where we left off
-    3. Stop: LLM simply stops calling the tool
+    Each call starts reading the file in background chunks (~100 words each).
+    The reading continues automatically until:
+    - All content is read
+    - User says "stop reading" (which calls stop_reading)
+    - A new file is loaded (restarts reading)
     """
     
     def __init__(self, config: dict, session_memory=None, voice_daemon=None):
@@ -50,10 +47,9 @@ class FileReadingTool(BaseTool):
     
     def _get_description(self) -> str:
         return (
-            "Read a file aloud chunk by chunk. Each call reads and speaks the next "
-            "portion of the file (~100 words). The LLM controls the pacing by calling "
-            "this tool repeatedly. To stop reading, simply don't call this tool again. "
-            "If no file_id is provided, reads the most recently uploaded file."
+            "Read a file aloud in background chunks. Each call starts reading ~100 words at a time. "
+            "The reading continues automatically until finished. "
+            "Use stop_file_reading to stop at any time."
         )
     
     def _get_input_schema(self) -> Dict[str, Any]:
@@ -66,7 +62,7 @@ class FileReadingTool(BaseTool):
                 },
                 "filename": {
                     "type": "string",
-                    "description": "Optional: partial filename to search for. Used if file_id not provided."
+                    "description": "Optional: partial filename to search for."
                 }
             },
             "required": []
@@ -134,8 +130,44 @@ class FileReadingTool(BaseTool):
         
         return True, f"Loaded {attachment['filename']} ({self.total_words} words)"
     
+    def _read_background(self):
+        """Background thread to read all chunks."""
+        chunks = self._split_into_chunks(self.current_content, self.chunk_size)
+        total_chunks = len(chunks)
+        
+        print(f"[FileReading] Background reading started: {total_chunks} chunks")
+        
+        while self.current_position < total_chunks and self.is_reading:
+            # Check stop flag
+            if not self.is_reading:
+                print(f"[FileReading] Stop flag detected, stopping background reading")
+                break
+            
+            chunk = chunks[self.current_position]
+            self.current_position += 1
+            chunk_words = len(chunk.split())
+            self.words_read += chunk_words
+            
+            # Speak via VoiceDaemon (NORMAL priority - doesn't interrupt)
+            if self.voice_daemon and self.is_reading:
+                print(f"[FileReading] Speaking chunk {self.current_position}/{total_chunks} ({chunk_words} words)")
+                result = self.voice_daemon.speak_file_content(
+                    text=chunk,
+                    paragraph_num=self.current_position,
+                    language="auto"
+                )
+                
+                if not result.get('success'):
+                    print(f"[FileReading] TTS failed for chunk {self.current_position}: {result.get('error')}")
+            
+            # Small delay between chunks
+            time.sleep(0.5)
+        
+        self.is_reading = False
+        print(f"[FileReading] Background reading finished. Read {self.words_read}/{self.total_words} words")
+    
     async def execute(self, file_id: str = None, filename: str = None) -> Dict[str, Any]:
-        """Read and speak the next chunk of the file."""
+        """Start reading the file in background, chunk by chunk."""
         
         # Check if we need to load a file
         if not self.is_reading or (file_id and file_id != self.current_file_id):
@@ -148,94 +180,69 @@ class FileReadingTool(BaseTool):
                 }
             print(f"[FileReading] {message}")
         
-        # Split content into chunks
-        chunks = self._split_into_chunks(self.current_content, self.chunk_size)
-        
-        # Check if we've finished
-        if self.current_position >= len(chunks):
-            self.is_reading = False
+        # If already reading, just return status
+        if self.is_reading:
+            progress_percent = int((self.words_read / self.total_words) * 100) if self.total_words > 0 else 0
+            chunks = self._split_into_chunks(self.current_content, self.chunk_size)
+            more_content = self.current_position < len(chunks)
+            
             return {
                 "success": True,
-                "status": "finished",
-                "message": f"Finished reading. Total: {self.words_read}/{self.total_words} words",
-                "progress_percent": 100,
-                "more_content": False
+                "status": "already_reading",
+                "message": f"Already reading: {self.words_read}/{self.total_words} words ({progress_percent}%)",
+                "words_read": self.words_read,
+                "total_words": self.total_words,
+                "progress_percent": progress_percent,
+                "more_content": more_content
             }
         
-        # Get next chunk
-        chunk = chunks[self.current_position]
-        self.current_position += 1
-        chunk_words = len(chunk.split())
-        self.words_read += chunk_words
+        # Start background reading thread
+        self.is_reading = True
+        self.current_position = 0
+        self.words_read = 0
         
-        # Speak the chunk via VoiceDaemon (HIGH priority for immediate response)
-        if self.voice_daemon:
-            try:
-                print(f"[FileReading] Speaking chunk {self.current_position}/{len(chunks)} ({chunk_words} words)")
-                result = self.voice_daemon.speak_immediately(
-                    text=chunk,
-                    language="auto"
-                )
-                
-                if not result.get('success'):
-                    return {
-                        "success": False,
-                        "error": f"TTS failed: {result.get('error')}",
-                        "status": "tts_error"
-                    }
-            except Exception as e:
-                print(f"[FileReading] TTS error: {e}")
-                return {
-                    "success": False,
-                    "error": f"TTS error: {str(e)}",
-                    "status": "tts_error"
-                }
-        else:
-            return {
-                "success": False,
-                "error": "Voice daemon not available",
-                "status": "no_voice_daemon"
-            }
+        reading_thread = threading.Thread(target=self._read_background, daemon=True)
+        reading_thread.start()
         
-        # Calculate progress
-        progress_percent = int((self.words_read / self.total_words) * 100) if self.total_words > 0 else 0
-        more_content = self.current_position < len(chunks)
+        chunks = self._split_into_chunks(self.current_content, self.chunk_size)
         
         return {
             "success": True,
-            "status": "reading",
-            "message": f"Read chunk {self.current_position} of {len(chunks)} ({progress_percent}% complete)",
-            "chunk_text": chunk[:100] + "..." if len(chunk) > 100 else chunk,
-            "words_read": self.words_read,
+            "status": "reading_started",
+            "message": f"Started reading ({len(chunks)} chunks)",
             "total_words": self.total_words,
-            "progress_percent": progress_percent,
-            "more_content": more_content,
             "chunks_total": len(chunks),
-            "chunks_read": self.current_position
+            "progress_percent": 0,
+            "more_content": True,
+            "instruction": "Say 'stop reading' to stop at any time"
         }
     
     def stop_reading(self) -> Dict[str, Any]:
-        """Stop the current reading session and reset state."""
+        """Stop the current reading session."""
         was_reading = self.is_reading
-        chunks_read = self.current_position
+        words_read = self.words_read
+        total_words = self.total_words
+        
+        # Just set the flag - the background thread will check it
+        self.is_reading = False
+        
+        # Also stop voice daemon to stop immediately
+        if self.voice_daemon:
+            self.voice_daemon.stop_current()
         
         # Reset state
         self.current_file_id = None
         self.current_content = ""
         self.current_position = 0
-        self.is_reading = False
         self.words_read = 0
         self.total_words = 0
-        
-        # Also stop voice daemon
-        if self.voice_daemon:
-            self.voice_daemon.stop_current()
         
         return {
             "success": True,
             "was_reading": was_reading,
-            "chunks_read": chunks_read,
-            "message": "Reading stopped." if was_reading else "Was not reading anything."
+            "words_read": words_read,
+            "total_words": total_words,
+            "message": f"Stopped reading. Read {words_read}/{total_words} words." if was_reading else "Was not reading anything."
         }
     
     def get_status(self) -> Dict[str, Any]:
