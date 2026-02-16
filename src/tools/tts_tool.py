@@ -772,11 +772,11 @@ class TTSTool(BaseTool):
                 "spoken": False
             }
         
-        # Use the current voice from edge_tts_tool (respects user's selection)
-        # The voice is already set via set_voice() when user selects from dropdown
-        voice = self.edge_tts_tool.get_current_voice()
+        # Get voice based on detected language (not user's configured voice)
+        # This allows auto-switching to Chinese voice for Chinese content
+        voice = self.edge_tts_tool._get_voice_for_language(language)
         
-        # Call Edge TTS with the selected voice
+        # Call Edge TTS with the appropriate voice for the language
         result = await self.edge_tts_tool.execute(text=text, voice=voice, speed=speed)
         
         # Add engine info
