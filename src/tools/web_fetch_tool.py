@@ -4,9 +4,12 @@ Uses BeautifulSoup for HTML parsing.
 """
 
 import asyncio
+import os
 import re
+import tempfile
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+from pathlib import Path
 
 from tools import BaseTool
 
@@ -270,9 +273,33 @@ class WebFetchTool(BaseTool):
             "char_count": len(content)
         }
         
-        # If read_aloud is requested, read the content via VoiceDaemon
+        # If read_aloud is requested, save content to temp file for reading
+        if read_aloud:
+            print(f"[WebFetch] read_aloud=True, saving to temp file...")
+            
+            # Save content to temp file
+            try:
+                # Create temp file with meaningful name
+                safe_title = "".join(c for c in (title or "webpage") if c.isalnum() or c in " -_")[:50]
+                temp_fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix=f"webfetch_{safe_title}_")
+                
+                with os.fdopen(temp_fd, 'w') as f:
+                    # Write title as header
+                    if title:
+                        f.write(f"{title}\n\n")
+                    f.write(content)
+                
+                result["temp_file"] = temp_path
+                result["message"] = f"Saved webpage content to temporary file. You can now read it aloud using the read_file_chunk tool with file_path: {temp_path}"
+                print(f"[WebFetch] Saved to temp file: {temp_path}")
+                
+            except Exception as e:
+                print(f"[WebFetch] Error saving to temp file: {e}")
+                result["message"] = f"Content fetched but could not save to file: {e}"
+        
+        # If voice_daemon is available, also queue for reading
         if read_aloud and self.voice_daemon:
-            print(f"[WebFetch] read_aloud=True, queuing content for reading...")
+            print(f"[WebFetch] Also queueing content for reading via voice daemon...")
             
             # Split content into chunks for reading
             chunks = []
@@ -297,10 +324,9 @@ class WebFetchTool(BaseTool):
                 self.voice_daemon.speak_file_content(
                     text=chunk,
                     paragraph_num=i+1,
-                    language=language
+                    language="auto"
                 )
             
-            result["message"] = f"Reading {len(chunks)} chunks from {title or 'webpage'}"
             result["is_reading"] = True
             print(f"[WebFetch] Queued {len(chunks)} chunks for reading")
         
