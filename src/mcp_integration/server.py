@@ -20,11 +20,12 @@ from core.voice_daemon import get_voice_daemon, VoiceDaemon
 class TalkieMCPServer:
     """MCP Server that exposes all assistant capabilities as tools."""
     
-    def __init__(self, config_path: str = "config/settings.yaml"):
+    def __init__(self, config_path: str = "config/settings.yaml", session_memory=None):
         self.config = self._load_config(config_path)
         self.server = Server(self.config["mcp"]["server_name"])
         self.tools = {}
         self.voice_daemon: Optional[VoiceDaemon] = None
+        self._external_session_memory = session_memory  # Store external session memory if provided
         self._register_tools()
         
     def _load_config(self, path: str) -> dict:
@@ -123,7 +124,13 @@ class TalkieMCPServer:
         )
         from core.session_memory import get_session_memory
         
-        self.session_memory = get_session_memory()
+        # Use external session memory if provided (from web server), otherwise create new
+        if self._external_session_memory:
+            self.session_memory = self._external_session_memory
+            print(f"[MCP Server] Using external session memory: {self.session_memory.session_id}")
+        else:
+            self.session_memory = get_session_memory()
+            print(f"[MCP Server] Created new session memory: {self.session_memory.session_id}")
         
         self.tools["search_session_memory"] = SearchSessionMemoryTool(self.config)
         self.tools["search_session_memory"].set_session_memory(self.session_memory)

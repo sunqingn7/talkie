@@ -87,9 +87,10 @@ class WebTalkieInterface:
         """Initialize MCP server and LLM client."""
         print("🚀 Initializing Talkie Web Interface...")
         
-        # Initialize MCP server - pass config_path, not config dict
+        # Initialize MCP server - pass config_path and session_memory to ensure shared instance
         config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'settings.yaml')
-        self.mcp_server = TalkieMCPServer(config_path)
+        print(f"[Web Server] Passing session memory to MCP server: {self.session_memory.session_id}")
+        self.mcp_server = TalkieMCPServer(config_path, session_memory=self.session_memory)
         await self.mcp_server.initialize()
         
         # Initialize LLM client - pass config_path
