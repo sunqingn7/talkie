@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from mcp_integration.server import TalkieMCPServer
 from core.llm_client import LLMClient
 from core.model_manager import get_model_manager
+from core.session_memory import get_session_memory, SessionMemory
 from tools.file_attachment_tool import FileAttachmentTool
 import yaml
 
@@ -59,6 +60,10 @@ class WebTalkieInterface:
         self.model_manager = get_model_manager("config/models.yaml")
         self.file_attachment_tool = None
         self.pending_attachments: List[dict] = []  # Store uploaded files waiting to be attached
+        
+        # Initialize session memory for persistent conversation tracking
+        self.session_memory: SessionMemory = get_session_memory()
+        print(f"[SessionMemory] Initialized with session: {self.session_memory.session_id}")
         
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -135,7 +140,18 @@ class WebTalkieInterface:
                 content = result.get("content") or ""
                 content_preview = content[:500] + "..." if len(content) > 500 else content
                 
-                print(f"   ✅ Upload processed: {filename} ({result['metadata']['file_type']})")
+                # Record attachment in session memory
+                attachment_memory_id = self.session_memory.record_attachment(
+                    filename=filename,
+                    file_type=result["metadata"]["file_type"],
+                    content=content,
+                    file_path=result.get("saved_path"),
+                    metadata={
+                        "size_bytes": result["metadata"]["size_bytes"],
+                        "pending_attachment_id": len(self.pending_attachments) - 1
+                    }
+                )
+                print(f"   ✅ Upload processed: {filename} ({result['metadata']['file_type']}) [Memory ID: {attachment_memory_id}]")
                 return {
                     "success": True,
                     "filename": filename,
@@ -168,6 +184,13 @@ class WebTalkieInterface:
             }
         
         try:
+            # Record user message in session memory
+            self.session_memory.record_message(
+                role="user",
+                content=user_message,
+                metadata={"attachment_ids": attachment_ids} if attachment_ids else {}
+            )
+            
             # Build context messages
             messages = self._build_context_messages(user_message)
             
@@ -268,6 +291,13 @@ class WebTalkieInterface:
                 # Update conversation history
                 self._add_to_history(user_message, content)
                 
+                # Record assistant response in session memory
+                self.session_memory.record_message(
+                    role="assistant",
+                    content=content,
+                    metadata={"auto_reading_triggered": user_wants_reading and attachment_ids is not None}
+                )
+                
                 return {
                     "type": "assistant_message",
                     "content": content,
@@ -331,6 +361,16 @@ class WebTalkieInterface:
             final_content = final_response["choices"][0]["message"].get("content", "")
             self._add_to_history(original_input, final_content, tool_results)
             
+            # Record assistant response with tool results in session memory
+            self.session_memory.record_message(
+                role="assistant",
+                content=final_content,
+                metadata={
+                    "tool_calls": [tr["tool"] for tr in tool_results],
+                    "tools_used_count": len(tool_results)
+                }
+            )
+            
             return {
                 "type": "assistant_message",
                 "content": final_content,
@@ -348,13 +388,35 @@ class WebTalkieInterface:
         """Build context messages with conversation history."""
         messages = []
         
-        # Add system prompt
+        # Add system prompt with memory capabilities
         system_prompt = self.config.get('llm', {}).get('system_prompt', '')
-        if system_prompt:
-            messages.append({
-                "role": "system",
-                "content": system_prompt
-            })
+        
+        # Add memory capabilities information
+        memory_info = """
+MEMORY CAPABILITIES:
+You have access to session memory tools that allow you to recall previous conversations and files:
+
+1. search_session_memory - Search chat history by keywords (e.g., "weather", "file", "read")
+2. get_recent_attachments - List recently uploaded files when user refers to "the file I uploaded"
+3. get_attachment_content - Retrieve full content of a previously uploaded file
+4. get_session_context - Get overview of session (topics discussed, files available)
+5. get_last_user_request - Retrieve user's previous request when they say "let's redo" or "again"
+
+Use these tools when:
+- User asks to "redo", "do that again", "repeat" - use get_last_user_request
+- User refers to "the file I uploaded", "that document" - use get_recent_attachments or get_attachment_content
+- User says "as I mentioned before" or references previous topics - use search_session_memory
+- User asks about conversation history - use get_session_context
+
+Always proactively use these tools when the user references past interactions.
+"""
+        
+        full_system_prompt = f"{system_prompt}\n\n{memory_info}" if system_prompt else memory_info
+        
+        messages.append({
+            "role": "system",
+            "content": full_system_prompt
+        })
         
         # Add recent history (last 10 exchanges)
         recent_history = self.conversation_history[-20:] if len(self.conversation_history) <= 20 else self.conversation_history[-20:]
@@ -942,6 +1004,67 @@ class WebTalkieInterface:
                 "message": f"Failed to get reading status: {str(e)}",
                 "timestamp": datetime.now().isoformat()
             }
+    
+    def get_session_memory_status(self) -> dict:
+        """Get session memory status and summary."""
+        try:
+            summary = self.session_memory.get_session_summary()
+            recent_attachments = self.session_memory.get_recent_attachments(5)
+            
+            return {
+                "type": "session_memory_status",
+                "session_id": summary['session_id'],
+                "started_at": summary['started_at'],
+                "message_count": summary['message_count'],
+                "attachment_count": summary['attachment_count'],
+                "recent_topics": summary.get('recent_topics', []),
+                "recent_attachments": [
+                    {
+                        "id": a['id'],
+                        "filename": a['filename'],
+                        "type": a['file_type'],
+                        "uploaded_at": a['datetime']
+                    }
+                    for a in recent_attachments
+                ],
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to get session memory status: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    async def search_session_memory(self, query: str, limit: int = 5) -> dict:
+        """Search session memory for messages matching query."""
+        try:
+            results = self.session_memory.search_messages(query, limit=limit)
+            
+            return {
+                "type": "session_memory_search",
+                "success": True,
+                "query": query,
+                "result_count": len(results),
+                "results": [
+                    {
+                        "role": r['role'],
+                        "content": r['content'][:200] + "..." if len(r['content']) > 200 else r['content'],
+                        "time": r['datetime'],
+                        "has_attachment": bool(r.get('metadata', {}).get('attachment_ids'))
+                    }
+                    for r in results
+                ],
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to search session memory: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
 
 
 # Create global interface instance
@@ -1289,6 +1412,59 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+
+
+# Session Memory API Endpoints
+@app.get("/api/session-memory")
+async def get_session_memory():
+    """Get session memory status and summary."""
+    return web_interface.get_session_memory_status()
+
+
+@app.post("/api/session-memory/search")
+async def search_session_memory_endpoint(data: dict):
+    """Search session memory for messages."""
+    query = data.get("query", "")
+    limit = data.get("limit", 5)
+    if not query:
+        return {"type": "error", "message": "No query provided"}
+    return await web_interface.search_session_memory(query, limit)
+
+
+@app.get("/api/session-memory/attachments")
+async def get_session_attachments():
+    """Get recent attachments from session memory."""
+    try:
+        attachments = web_interface.session_memory.get_recent_attachments(10)
+        return {
+            "type": "session_attachments",
+            "attachments": [
+                {
+                    "id": a['id'],
+                    "filename": a['filename'],
+                    "type": a['file_type'],
+                    "uploaded_at": a['datetime'],
+                    "preview": a.get('content_preview', '')[:100] + "..." if a.get('content_preview') else None
+                }
+                for a in attachments
+            ]
+        }
+    except Exception as e:
+        return {"type": "error", "message": str(e)}
+
+
+@app.post("/api/session-memory/clear")
+async def clear_session_memory():
+    """Clear current session memory."""
+    try:
+        web_interface.session_memory.clear()
+        return {
+            "type": "session_memory_cleared",
+            "message": "Session memory cleared successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"type": "error", "message": str(e)}
 
 
 def run_web_server(host: str = "0.0.0.0", port: int = 8082):

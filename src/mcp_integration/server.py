@@ -114,6 +114,31 @@ class TalkieMCPServer:
         if "datetime" in enabled:
             from tools.datetime_tool import DateTimeTool
             self.tools["datetime"] = DateTimeTool(self.config)
+        
+        # Register Session Memory tools
+        # These allow the LLM to query conversation history and context
+        from tools.memory_tools import (
+            SearchSessionMemoryTool, GetRecentAttachmentsTool,
+            GetAttachmentContentTool, GetSessionContextTool, GetLastUserRequestTool
+        )
+        from core.session_memory import get_session_memory
+        
+        self.session_memory = get_session_memory()
+        
+        self.tools["search_session_memory"] = SearchSessionMemoryTool(self.config)
+        self.tools["search_session_memory"].set_session_memory(self.session_memory)
+        
+        self.tools["get_recent_attachments"] = GetRecentAttachmentsTool(self.config)
+        self.tools["get_recent_attachments"].set_session_memory(self.session_memory)
+        
+        self.tools["get_attachment_content"] = GetAttachmentContentTool(self.config)
+        self.tools["get_attachment_content"].set_session_memory(self.session_memory)
+        
+        self.tools["get_session_context"] = GetSessionContextTool(self.config)
+        self.tools["get_session_context"].set_session_memory(self.session_memory)
+        
+        self.tools["get_last_user_request"] = GetLastUserRequestTool(self.config)
+        self.tools["get_last_user_request"].set_session_memory(self.session_memory)
     
     def list_tools(self) -> List[Tool]:
         """Return list of available tools for MCP protocol."""
