@@ -195,30 +195,21 @@ class VoiceDaemon:
             
             # Execute TTS in the event loop
             print(f"[VoiceDaemon] Executing TTS for: {short_text}")
-            print(f"[VoiceDaemon] About to call run_coroutine_threadsafe...")
             
             try:
-                future = asyncio.run_coroutine_threadsafe(
+                # Since we're already in the daemon thread with the event loop,
+                # use run_until_complete instead of run_coroutine_threadsafe
+                print(f"[VoiceDaemon] Running TTS coroutine directly in event loop...")
+                result = loop.run_until_complete(
                     self.tts_tool.execute(
                         text=request.text,
                         language=request.language,
                         speaker_id=request.speaker_id,
                         speed=request.speed
-                    ),
-                    loop
+                    )
                 )
-                print(f"[VoiceDaemon] Future created, waiting for result...")
-            except Exception as e:
-                print(f"[VoiceDaemon] Error creating future: {e}")
-                import traceback
-                traceback.print_exc()
-                return
-
-            # Wait for TTS to complete (with timeout)
-            try:
-                print(f"[VoiceDaemon] Calling future.result() with 180s timeout...")
-                result = future.result(timeout=180)  # 3 minute timeout
                 print(f"[VoiceDaemon] TTS result: success={result.get('success')}, error={result.get('error', 'None')}")
+                
                 if result.get('success'):
                     # Estimate wait time based on text length
                     estimated_duration = len(request.text) / 15  # ~15 chars per second
