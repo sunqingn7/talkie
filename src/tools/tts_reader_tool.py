@@ -83,6 +83,35 @@ class TTSReaderTool(BaseTool):
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
         return paragraphs
     
+    def batch_paragraphs(self, paragraphs: List[str], max_words: int = 100) -> List[str]:
+        """
+        Batch paragraphs together to reach approximately max_words per batch.
+        
+        This reduces the number of TTS calls and makes speech flow better.
+        """
+        batches = []
+        current_batch = []
+        current_word_count = 0
+        
+        for paragraph in paragraphs:
+            word_count = len(paragraph.split())
+            
+            # If adding this paragraph would exceed max_words and we already have content,
+            # finalize the current batch and start a new one
+            if current_word_count > 0 and current_word_count + word_count > max_words:
+                batches.append('\n\n'.join(current_batch))
+                current_batch = [paragraph]
+                current_word_count = word_count
+            else:
+                current_batch.append(paragraph)
+                current_word_count += word_count
+        
+        # Don't forget the last batch
+        if current_batch:
+            batches.append('\n\n'.join(current_batch))
+        
+        return batches
+    
     def is_reading_active(self) -> bool:
         """Check if currently reading."""
         return self.is_reading
@@ -128,60 +157,66 @@ class TTSReaderTool(BaseTool):
         }
     
     def read_paragraphs_sync(self, paragraphs: List[str], start_idx: int = 0, language: str = "auto"):
-        """Synchronous function to queue paragraphs via Voice Daemon."""
+        """Synchronous function to queue batched paragraphs via Voice Daemon."""
+        # Batch paragraphs by word count for better flow
+        batches = self.batch_paragraphs(paragraphs[start_idx:], max_words=100)
         print(f"[TTSReader] Starting to read {len(paragraphs)} paragraphs from index {start_idx}")
+        print(f"[TTSReader] Batched into {len(batches)} chunks (max ~100 words each)")
         self.is_reading = True
         self.total_paragraphs = len(paragraphs)
 
         try:
-            for i in range(start_idx, len(paragraphs)):
+            for batch_idx, batch in enumerate(batches):
+                # Calculate actual paragraph number for tracking
+                paragraphs_in_batch = batch.count('\n\n') + 1
+                self.current_paragraph = start_idx + sum(len(self.batch_paragraphs([paragraphs[start_idx + i]], max_words=100)[0].split('\n\n')) for i in range(batch_idx)) + paragraphs_in_batch
+                
                 # Check if stop was requested
                 if self.stop_event.is_set():
-                    print(f"[TTSReader] Stop requested, breaking at paragraph {i+1}")
+                    print(f"[TTSReader] Stop requested, breaking at batch {batch_idx+1}")
                     break
 
-                self.current_paragraph = i + 1
-                paragraph = paragraphs[i]
-
-                # Skip very short paragraphs
-                if len(paragraph) < 10:
-                    print(f"[TTSReader] Skipping short paragraph {i+1}")
+                # Skip very short batches
+                if len(batch) < 10:
+                    print(f"[TTSReader] Skipping short batch {batch_idx+1}")
                     continue
 
                 # Check stop event again before queuing
                 if self.stop_event.is_set():
-                    print(f"[TTSReader] Stop requested before queuing paragraph {i+1}")
+                    print(f"[TTSReader] Stop requested before queuing batch {batch_idx+1}")
                     break
 
-                # Queue paragraph via Voice Daemon (NORMAL priority)
+                # Queue batch via Voice Daemon (NORMAL priority)
                 if self.voice_daemon:
                     try:
-                        print(f"[TTSReader] Queuing paragraph {i+1}/{len(paragraphs)} ({len(paragraph)} chars)")
+                        word_count = len(batch.split())
+                        print(f"[TTSReader] Queuing batch {batch_idx+1}/{len(batches)} ({word_count} words, {len(batch)} chars)")
                         result = self.voice_daemon.speak_file_content(
-                            text=paragraph[:500],  # Limit to 500 chars per paragraph
-                            paragraph_num=i + 1,
+                            text=batch[:2000],  # Limit to 2000 chars per batch
+                            paragraph_num=batch_idx + 1,
                             language=language if language != "auto" else "auto"
                         )
 
                         if not result.get('success'):
-                            print(f"[TTSReader] ⚠️ Failed to queue paragraph {i+1}: {result.get('error')}")
+                            print(f"[TTSReader] ⚠️ Failed to queue batch {batch_idx+1}: {result.get('error')}")
                         else:
-                            print(f"[TTSReader] ✅ Queued paragraph {i+1}, queue position: {result.get('position')}")
+                            print(f"[TTSReader] ✅ Queued batch {batch_idx+1}, queue position: {result.get('position')}")
                     except Exception as e:
-                        print(f"[TTSReader] ⚠️ Error queuing paragraph {i+1}: {e}")
+                        print(f"[TTSReader] ⚠️ Error queuing batch {batch_idx+1}: {e}")
                         import traceback
                         traceback.print_exc()
                 else:
                     print(f"[TTSReader] ⚠️ Voice daemon not available")
                     break
 
-                # Check stop event again
+                # Check stop event again after queuing
                 if self.stop_event.is_set():
-                    print(f"[TTSReader] Stop requested after queuing paragraph {i+1}")
+                    print(f"[TTSReader] Stop requested after queuing batch {batch_idx+1}")
                     break
 
-                # Small delay between queuing paragraphs to allow processing
-                time.sleep(0.5)
+                # No delay needed between batches - VoiceDaemon handles pacing
+                # Just a tiny yield to allow other threads to run
+                time.sleep(0.1)
 
             print(f"[TTSReader] Finished reading loop. Processed {self.current_paragraph} paragraphs")
 
