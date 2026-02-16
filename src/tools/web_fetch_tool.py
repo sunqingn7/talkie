@@ -13,6 +13,22 @@ from pathlib import Path
 
 from tools import BaseTool
 
+# Language to voice mapping for Edge TTS
+LANGUAGE_VOICE_MAP = {
+    "zh-cn": "zh-CN-XiaoxiaoNeural",
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "ar": "ar-SA-ZariyahNeural",
+    "ru": "ru-RU-DariaNeural",
+    "fr": "fr-FR-DeniseNeural",
+    "de": "de-DE-KatjaNeural",
+    "es": "es-ES-ElviraNeural",
+    "it": "it-IT-ElsaNeural",
+    "pt": "pt-BR-FranciscaNeural",
+    "en": "en-US-AriaNeural",
+}
+
 
 class WebFetchTool(BaseTool):
     """Tool to fetch and parse webpages.
@@ -23,6 +39,7 @@ class WebFetchTool(BaseTool):
     - Removes ads, navigation, scripts, styles
     - Returns clean text content
     - Can optionally read aloud via TTS
+    - Auto-detects language and selects appropriate TTS voice
     """
     
     # Common unwanted elements to remove
@@ -31,6 +48,47 @@ class WebFetchTool(BaseTool):
         'form', 'iframe', 'noscript', 'svg', 'button', 'input',
         'meta', 'link', 'br', 'hr'
     ]
+    
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text content."""
+        # Check for Chinese characters
+        if re.search(r'[\u4e00-\u9fff]', text):
+            return "zh-cn"
+        
+        # Check for Japanese
+        if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):
+            return "ja"
+        
+        # Check for Korean
+        if re.search(r'[\uac00-\ud7af]', text):
+            return "ko"
+        
+        # Check for Arabic
+        if re.search(r'[\u0600-\u06ff]', text):
+            return "ar"
+        
+        # Check for Cyrillic (Russian)
+        if re.search(r'[\u0400-\u04ff]', text):
+            return "ru"
+        
+        # Check for French accented characters
+        if re.search(r'[àâäéèêëïîôùûüÿœæç]', text, re.IGNORECASE):
+            return "fr"
+        
+        # Check for German
+        if re.search(r'[äöüß]', text):
+            return "de"
+        
+        # Check for Spanish
+        if re.search(r'[áéíóúüñ¿¡]', text):
+            return "es"
+        
+        # Default to English
+        return "en"
+    
+    def _get_tts_voice(self, language: str) -> str:
+        """Get TTS voice for detected language."""
+        return LANGUAGE_VOICE_MAP.get(language, "en-US-AriaNeural")
     
     # Classes that typically contain unwanted content
     REMOVE_CLASSES = [
@@ -262,7 +320,11 @@ class WebFetchTool(BaseTool):
         
         word_count = len(content.split())
         
-        print(f"✅ Fetched {len(content)} chars, {word_count} words")
+        # Detect language from content
+        detected_language = self._detect_language(content)
+        tts_voice = self._get_tts_voice(detected_language)
+        
+        print(f"✅ Fetched {len(content)} chars, {word_count} words, language: {detected_language}, voice: {tts_voice}")
         
         result = {
             "success": True,
@@ -270,7 +332,9 @@ class WebFetchTool(BaseTool):
             "title": title,
             "content": content,
             "word_count": word_count,
-            "char_count": len(content)
+            "char_count": len(content),
+            "detected_language": detected_language,
+            "tts_voice": tts_voice
         }
         
         # If read_aloud is requested, save content to temp file for reading
@@ -290,16 +354,16 @@ class WebFetchTool(BaseTool):
                     f.write(content)
                 
                 result["temp_file"] = temp_path
-                result["message"] = f"Saved webpage content to temporary file. You can now read it aloud using the read_file_chunk tool with file_path: {temp_path}"
+                result["message"] = f"Saved webpage content ({detected_language}, {word_count} words) to temporary file. Use read_file_chunk to read it with voice: {tts_voice}"
                 print(f"[WebFetch] Saved to temp file: {temp_path}")
                 
             except Exception as e:
                 print(f"[WebFetch] Error saving to temp file: {e}")
                 result["message"] = f"Content fetched but could not save to file: {e}"
         
-        # If voice_daemon is available, also queue for reading
+        # If voice_daemon is available, also queue for reading with detected language
         if read_aloud and self.voice_daemon:
-            print(f"[WebFetch] Also queueing content for reading via voice daemon...")
+            print(f"[WebFetch] Queueing content for reading via voice daemon (language: {detected_language}, voice: {tts_voice})...")
             
             # Split content into chunks for reading
             chunks = []
@@ -319,12 +383,12 @@ class WebFetchTool(BaseTool):
             if current_chunk:
                 chunks.append(current_chunk)
             
-            # Queue chunks for reading
+            # Queue chunks for reading with detected language
             for i, chunk in enumerate(chunks):
                 self.voice_daemon.speak_file_content(
                     text=chunk,
                     paragraph_num=i+1,
-                    language="auto"
+                    language=detected_language  # Use detected language
                 )
             
             result["is_reading"] = True

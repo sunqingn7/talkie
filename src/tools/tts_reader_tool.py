@@ -44,6 +44,36 @@ class TTSReaderTool(BaseTool):
         self.batches: List[str] = []  # Store batches for generation
         self.language = "auto"
         self.batch_lock = threading.Lock()
+    
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text content."""
+        import re
+        # Check for Chinese characters
+        if re.search(r'[\u4e00-\u9fff]', text):
+            return "zh-cn"
+        # Check for Japanese
+        if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):
+            return "ja"
+        # Check for Korean
+        if re.search(r'[\uac00-\ud7af]', text):
+            return "ko"
+        # Check for Arabic
+        if re.search(r'[\u0600-\u06ff]', text):
+            return "ar"
+        # Check for Cyrillic (Russian)
+        if re.search(r'[\u0400-\u04ff]', text):
+            return "ru"
+        # Check for French
+        if re.search(r'[àâäéèêëïîôùûüÿœæç]', text, re.IGNORECASE):
+            return "fr"
+        # Check for German
+        if re.search(r'[äöüß]', text):
+            return "de"
+        # Check for Spanish
+        if re.search(r'[áéíóúüñ¿¡]', text):
+            return "es"
+        # Default to English
+        return "en"
 
     def _get_description(self) -> str:
         return (
@@ -467,6 +497,11 @@ class TTSReaderTool(BaseTool):
                 "success": False,
                 "error": "No content to read"
             }
+        
+        # Auto-detect language if set to "auto"
+        if language == "auto":
+            language = self._detect_language(content)
+            print(f"[TTSReader] Auto-detected language: {language}")
         
         # Split into paragraphs
         paragraphs = self.split_into_paragraphs(content)
