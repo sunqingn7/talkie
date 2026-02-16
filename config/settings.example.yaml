@@ -90,6 +90,7 @@ mcp:
     - datetime
     - web_search
     - web_news
+    - web_fetch
 
 # Weather Settings
 weather:

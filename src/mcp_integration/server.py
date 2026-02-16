@@ -109,6 +109,10 @@ class TalkieMCPServer:
         if "web_news" in enabled:
             from tools.web_search_tool import WebNewsTool
             self.tools["web_news"] = WebNewsTool(self.config)
+        
+        if "web_fetch" in enabled:
+            from tools.web_fetch_tool import WebFetchTool
+            self.tools["web_fetch"] = WebFetchTool(self.config)
             
         if "datetime" in enabled:
             from tools.datetime_tool import DateTimeTool
