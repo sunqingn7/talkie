@@ -510,23 +510,39 @@ class TTSTool(BaseTool):
         return None
     
     def stop_audio(self) -> bool:
-        """Stop the current audio playback immediately."""
+        """Stop the current audio playback immediately.
+        
+        Also delegates to current engine's stop_audio() method if available.
+        """
+        stopped = False
+        
+        # Stop local process (Coqui/pyttsx3)
         if self.current_audio_process and self.current_audio_process.poll() is None:
             try:
-                print(f" [AUDIO DEBUG] Stopping audio process {self.current_audio_process.pid}")
+                print(f" [AUDIO DEBUG] Stopping local audio process {self.current_audio_process.pid}")
                 self.current_audio_process.terminate()
                 try:
                     self.current_audio_process.wait(timeout=1)
                 except:
                     self.current_audio_process.kill()
-                self.is_playing = False
-                self.current_audio_process = None
-                print(f" [AUDIO DEBUG] Audio stopped")
-                return True
+                stopped = True
             except Exception as e:
-                print(f" [AUDIO DEBUG] Error stopping audio: {e}")
-                return False
-        self.is_playing = False
+                print(f" [AUDIO DEBUG] Error stopping local audio: {e}")
+            self.is_playing = False
+            self.current_audio_process = None
+        
+        # Delegate to current engine's stop_audio()
+        if self.current_engine == "edge_tts" and self.edge_tts_tool and hasattr(self.edge_tts_tool, 'stop_audio'):
+            try:
+                print(f" [AUDIO DEBUG] Delegating stop_audio to EdgeTTS tool")
+                if self.edge_tts_tool.stop_audio():
+                    stopped = True
+            except Exception as e:
+                print(f" [AUDIO DEBUG] Error stopping Edge TTS audio: {e}")
+        
+        if stopped:
+            print(f" [AUDIO DEBUG] Audio stopped successfully")
+            return True
         return False
     
     def wait_for_audio(self, timeout: float = None) -> bool:
