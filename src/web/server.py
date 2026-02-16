@@ -395,11 +395,13 @@ class WebTalkieInterface:
             reading_intent_phrases = ['read this', 'will read', 'start reading',
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
-            has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
+            # Check for both old and new reading tools
+            has_called_read_tool = any(tr["tool"] in ["read_file_aloud", "read_file_chunk"] for tr in tool_results)
             has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
-            has_stop_reading = any(tr["tool"] == "stop_reading" for tr in tool_results)
+            has_stop_reading = any(tr["tool"] in ["stop_reading", "stop_file_reading"] for tr in tool_results)
+            has_read_file_chunk = any(tr["tool"] == "read_file_chunk" for tr in tool_results)
 
-            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_stop_reading={has_stop_reading}")
+            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}")
             print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
 
             # If LLM fetched attachment content but didn't call read_file_aloud, auto-trigger reading
@@ -490,42 +492,37 @@ class WebTalkieInterface:
         # Add system prompt with memory capabilities
         system_prompt = self.config.get('llm', {}).get('system_prompt', '')
         
-        # Add memory capabilities information
+        # Add memory and file reading information
         memory_info = """
-MEMORY CAPABILITIES:
-You have access to session memory tools that allow you to recall previous conversations and files:
+MEMORY & FILE READING:
+You have access to session memory tools and a new chunk-based file reading system:
 
-1. search_session_memory - Search chat history by keywords (e.g., "weather", "file", "read")
-2. get_recent_attachments - List recently uploaded files when user refers to "the file I uploaded"
-3. get_attachment_content - Retrieve full content of a previously uploaded file
-4. get_session_context - Get overview of session (topics discussed, files available)
-5. get_last_user_request - Retrieve user's previous request when they say "let's redo" or "again"
-6. read_file_aloud - ACTUALLY READS FILE CONTENT ALOUD using text-to-speech
+MEMORY TOOLS:
+1. search_session_memory - Search chat history by keywords
+2. get_recent_attachments - List recently uploaded files
+3. get_attachment_content - Get full content of a file
+4. get_session_context - Get overview of session
+5. get_last_user_request - Get user's previous request
 
-CRITICAL INSTRUCTION - When user asks you to READ A FILE ALOUD:
-You MUST call TWO tools in sequence:
-1. First: get_attachment_content to get the file content
-2. Second: read_file_aloud with the content parameter to actually start reading
+FILE READING TOOLS (NEW CHUNK-BASED SYSTEM):
+- read_file_chunk - Read ~100 words at a time. Call repeatedly to continue reading.
+- stop_file_reading - Stop the current reading session
 
-DO NOT just acknowledge that you will read it - you MUST call read_file_aloud tool.
-The read_file_aloud tool will queue the content for text-to-speech playback.
+HOW TO READ A FILE ALOUD:
+1. User says "read the file" or similar
+2. Call read_file_chunk tool (no parameters needed - it auto-loads the most recent file)
+3. The tool will speak ~100 words and return status
+4. If more_content=true, call read_file_chunk again to continue
+5. If user says "stop", simply DON'T call read_file_chunk again
+6. Use stop_file_reading tool to explicitly stop
 
-Example workflow:
-User: "Read the file I uploaded"
-You: [call get_attachment_content to get the file content]
-[Tool returns file content]
-You: [call read_file_aloud with content="file content here"]
-
-Use these tools when:
-- User asks to "redo", "do that again", "repeat" - use get_last_user_request
-- User refers to "the file I uploaded", "that document" - use get_recent_attachments or get_attachment_content
-- User says "as I mentioned before" or references previous topics - use search_session_memory
-- User asks about conversation history - use get_session_context
-- User asks you to read a file aloud - use get_attachment_content THEN read_file_aloud
-
-Always proactively use these tools when the user references past interactions.
+IMPORTANT:
+- Each call to read_file_chunk reads ONE chunk (~100 words)
+- Check the "more_content" in the response to know if there's more
+- To stop: just stop calling the tool (natural stopping!)
+- Don't queue multiple reads - let each chunk finish before calling again
 """
-        
+
         full_system_prompt = f"{system_prompt}\n\n{memory_info}" if system_prompt else memory_info
         
         messages.append({

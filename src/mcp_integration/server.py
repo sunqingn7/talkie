@@ -146,6 +146,29 @@ class TalkieMCPServer:
         
         self.tools["get_last_user_request"] = GetLastUserRequestTool(self.config)
         self.tools["get_last_user_request"].set_session_memory(self.session_memory)
+        
+        # Register NEW File Reading Tool (chunk-by-chunk MCP-based reading)
+        # This replaces the old read_file_aloud for better control
+        from tools.file_reading_tool import FileReadingTool
+        
+        self.tools["read_file_chunk"] = FileReadingTool(self.config)
+        self.tools["read_file_chunk"].set_session_memory(self.session_memory)
+        self.tools["read_file_chunk"].set_voice_daemon(self.voice_daemon)
+        print("[MCP Server] Registered read_file_chunk tool (chunk-by-chunk reading)")
+        
+        # Also register stop_file_reading for the new tool
+        class StopFileReadingTool:
+            def __init__(self, file_reading_tool):
+                self.file_tool = file_reading_tool
+                self.name = "stop_file_reading"
+                self.description = "Stop the current file reading session"
+                self.input_schema = {"type": "object", "properties": {}}
+            
+            async def execute(self):
+                return self.file_tool.stop_reading()
+        
+        self.tools["stop_file_reading"] = StopFileReadingTool(self.tools["read_file_chunk"])
+        print("[MCP Server] Registered stop_file_reading tool")
     
     def list_tools(self) -> List[Tool]:
         """Return list of available tools for MCP protocol."""
