@@ -99,10 +99,13 @@ class WebTalkieInterface:
         
     async def upload_file(self, file_content: bytes, filename: str, transcribe: bool = True) -> dict:
         """Upload and process a file, returning file info for attachment."""
+        print(f"📎 Processing upload: {filename} ({len(file_content)} bytes)")
+        
         if not self.file_attachment_tool:
+            print("   ❌ File attachment tool not initialized!")
             return {
                 "success": False,
-                "error": "File attachment tool not initialized",
+                "error": "File attachment tool not initialized. Please refresh the page.",
                 "filename": filename
             }
         
@@ -128,14 +131,20 @@ class WebTalkieInterface:
                 if len(self.pending_attachments) > 10:
                     self.pending_attachments = self.pending_attachments[-10:]
                 
+                # Safely get content preview
+                content = result.get("content") or ""
+                content_preview = content[:500] + "..." if len(content) > 500 else content
+                
+                print(f"   ✅ Upload processed: {filename} ({result['metadata']['file_type']})")
                 return {
                     "success": True,
                     "filename": filename,
                     "file_type": result["metadata"]["file_type"],
-                    "content_preview": result.get("content", "")[:500] + "..." if len(result.get("content", "")) > 500 else result.get("content", ""),
+                    "content_preview": content_preview,
                     "attachment_id": len(self.pending_attachments) - 1
                 }
             else:
+                print(f"   ❌ Upload failed: {filename} - {result.get('error')}")
                 return {
                     "success": False,
                     "error": result.get("error", "Unknown error"),
@@ -382,25 +391,31 @@ class WebTalkieInterface:
     
     def get_system_status(self) -> dict:
         """Get current system status."""
-        # Get actually running LLM model, not just config
+        # Get actually running LLM model
         running_model = self.model_manager.get_running_model()
+        
         if running_model and running_model.get("model_path"):
-            # Extract model name from path
-            model_path = running_model["model_path"]
-            llm_model = os.path.basename(model_path) if "/" in model_path else model_path
-            # Also try to get friendly name from model manager
-            available_models = self.model_manager.scan_available_models()
-            for model in available_models:
-                if model.get("path") == model_path:
-                    llm_model = model.get("name", llm_model)
-                    break
+            # Use model_name if available, otherwise extract from path
+            if running_model.get("model_name"):
+                llm_model = running_model["model_name"]
+            else:
+                model_path = running_model["model_path"]
+                llm_model = os.path.basename(model_path) if "/" in model_path else model_path
+            is_running = True
         else:
             llm_model = "Not running"
+            is_running = False
+        
+        # Get voice daemon status
+        voice_daemon_status = {}
+        if self.mcp_server and self.mcp_server.voice_daemon:
+            voice_daemon_status = self.mcp_server.voice_daemon.get_status()
         
         return {
             "type": "system_status",
             "mcp_server_ready": self.mcp_server is not None,
             "llm_client_ready": self.llm_client is not None,
+            "llm_running": is_running,
             "available_tools": list(self.mcp_server.tools.keys()) if self.mcp_server else [],
             "conversation_count": len(self.conversation_history) // 2,
             "config": {
@@ -409,6 +424,7 @@ class WebTalkieInterface:
                 "llm_model": llm_model,
                 "stt_model": self.config.get('stt', {}).get('model', 'unknown'),
             },
+            "voice_daemon": voice_daemon_status,
             "timestamp": datetime.now().isoformat()
         }
     
@@ -982,12 +998,34 @@ async def upload_file_endpoint(
     transcribe: bool = Form(True)
 ):
     """Upload a file for attachment."""
+    import time
+    start_time = time.time()
+    
     try:
+        # Read file content
         content = await file.read()
         filename = file.filename or "unknown_file"
+        
+        print(f"📤 Upload request received: {filename} ({len(content)} bytes)")
+        
+        # Check file size
+        if not content:
+            return JSONResponse(
+                content={"success": False, "error": "Empty file", "filename": filename},
+                status_code=400
+            )
+        
         result = await web_interface.upload_file(content, filename, transcribe)
+        
+        elapsed = time.time() - start_time
+        print(f"📤 Upload completed in {elapsed:.2f}s: {filename}")
+        
         return JSONResponse(content=result)
     except Exception as e:
+        import traceback
+        elapsed = time.time() - start_time
+        print(f"❌ Upload error after {elapsed:.2f}s: {e}")
+        traceback.print_exc()
         return JSONResponse(
             content={"success": False, "error": str(e)},
             status_code=500

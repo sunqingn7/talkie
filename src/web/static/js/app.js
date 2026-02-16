@@ -172,6 +172,8 @@ class TalkieApp {
     }
     
     async uploadFile(file) {
+        console.log('📤 Starting upload:', file.name, file.size, 'bytes');
+        
         // Add pending attachment UI
         const attachmentId = this.attachments.length;
         const attachment = {
@@ -189,12 +191,15 @@ class TalkieApp {
             formData.append('file', file);
             formData.append('transcribe', 'true');
             
+            console.log('📤 Sending upload request...');
             const response = await fetch('/api/upload', {
                 method: 'POST',
                 body: formData
             });
+            console.log('📤 Response status:', response.status);
             
             const result = await response.json();
+            console.log('📤 Upload result:', result);
             
             if (result.success) {
                 attachment.status = 'ready';
@@ -209,6 +214,7 @@ class TalkieApp {
                 this.showNotification(`Upload failed: ${result.error}`, 'error');
             }
         } catch (error) {
+            console.error('📤 Upload error:', error);
             attachment.status = 'error';
             attachment.error = error.message;
             this.updateAttachmentChip(attachment);
@@ -1076,7 +1082,7 @@ class TalkieApp {
             // Add change handler
             speakerSelect.onchange = (e) => {
                 const speakerId = e.target.value;
-                if (speakerId && speakerId !== currentSpeaker) {
+                if (speakerId) {
                     if (currentEngine === 'edge_tts') {
                         this.switchEdgeVoice(speakerId);
                     } else {

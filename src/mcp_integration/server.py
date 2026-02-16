@@ -10,6 +10,12 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 import yaml
 
+# Import voice daemon
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.voice_daemon import get_voice_daemon, VoiceDaemon
+
 
 class TalkieMCPServer:
     """MCP Server that exposes all assistant capabilities as tools."""
@@ -18,6 +24,7 @@ class TalkieMCPServer:
         self.config = self._load_config(config_path)
         self.server = Server(self.config["mcp"]["server_name"])
         self.tools = {}
+        self.voice_daemon: Optional[VoiceDaemon] = None
         self._register_tools()
         
     def _load_config(self, path: str) -> dict:
@@ -37,13 +44,28 @@ class TalkieMCPServer:
         from tools.tts_tool import TTSTool
         self.tools["speak"] = TTSTool(self.config)
         
+        # Initialize Voice Daemon with TTS tool
+        self.voice_daemon = get_voice_daemon(self.tools["speak"])
+        
         # Register TTS reader tools for reading files with paragraph-by-paragraph TTS
+        # These now use the voice daemon internally
         from tools.tts_reader_tool import TTSReaderTool, StopReadingTool
         self.tools["read_file_aloud"] = TTSReaderTool(self.config)
-        self.tools["read_file_aloud"].set_tts_tool(self.tools["speak"])
+        self.tools["read_file_aloud"].set_voice_daemon(self.voice_daemon)
         
         self.tools["stop_reading"] = StopReadingTool(self.config)
         self.tools["stop_reading"].set_reader_tool(self.tools["read_file_aloud"])
+        
+        # Register Voice Daemon control tools
+        from tools.voice_daemon_tool import VoiceDaemonStatusTool, VoiceDaemonStopTool, VoiceDaemonSkipTool
+        self.tools["voice_daemon_status"] = VoiceDaemonStatusTool(self.config)
+        self.tools["voice_daemon_status"].set_voice_daemon(self.voice_daemon)
+        
+        self.tools["voice_daemon_stop"] = VoiceDaemonStopTool(self.config)
+        self.tools["voice_daemon_stop"].set_voice_daemon(self.voice_daemon)
+        
+        self.tools["voice_daemon_skip"] = VoiceDaemonSkipTool(self.config)
+        self.tools["voice_daemon_skip"].set_voice_daemon(self.voice_daemon)
             
         if "weather" in enabled:
             from tools.weather_tool import WeatherTool
@@ -115,6 +137,12 @@ class TalkieMCPServer:
     
     async def initialize(self):
         """Initialize all tools (for web interface compatibility)."""
+        # Initialize voice daemon first
+        if self.voice_daemon:
+            self.voice_daemon.start()
+            print("✅ Voice daemon started")
+        
+        # Initialize all tools
         for name, tool in self.tools.items():
             if hasattr(tool, 'initialize'):
                 try:

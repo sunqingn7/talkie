@@ -445,10 +445,12 @@ body {
 /* Control Panel */
 .control-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: minmax(200px, auto);
     gap: 20px;
     padding: 24px;
     overflow-y: auto;
+    max-height: calc(100vh - 120px);
 }
 
 .control-card {
@@ -456,10 +458,64 @@ body {
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
 }
 
 .control-card.wide {
     grid-column: 1 / -1;
+}
+
+.control-card .card-body {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    max-height: 450px;
+    min-height: 200px;
+}
+
+.control-card .card-body.tools-body {
+    max-height: 180px;
+}
+
+/* Model list - single scrollbar in card-body */
+.model-list,
+#llm-model-list {
+    overflow-y: visible;
+}
+
+/* Force scrollbar to always be visible when needed */
+.control-card .card-body::-webkit-scrollbar,
+.model-list.scrollable::-webkit-scrollbar,
+#llm-model-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.control-card .card-body::-webkit-scrollbar-track,
+.model-list.scrollable::-webkit-scrollbar-track,
+#llm-model-list::-webkit-scrollbar-track {
+    background: var(--bg-dark);
+    border-radius: 4px;
+}
+
+.control-card .card-body::-webkit-scrollbar-thumb,
+.model-list.scrollable::-webkit-scrollbar-thumb,
+#llm-model-list::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+.control-card .card-body::-webkit-scrollbar-thumb:hover,
+.model-list.scrollable::-webkit-scrollbar-thumb:hover,
+#llm-model-list::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+.tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
 }
 
 .card-header {

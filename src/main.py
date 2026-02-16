@@ -1,6 +1,6 @@
 """
 Main orchestrator for the voice assistant.
-Coordinates between STT, MCP tools, LLM, and TTS.
+Coordinates between STT, MCP tools, LLM, and TTS via Voice Daemon.
 """
 
 import os
@@ -20,6 +20,7 @@ import yaml
 
 from core.llm_client import LLMClient
 from mcp_integration.server import TalkieMCPServer
+from core.voice_daemon import Priority
 
 
 class VoiceAssistant:
@@ -212,9 +213,13 @@ class VoiceAssistant:
             # Direct response
             print(f"🤖 Assistant: {content}")
             
-            # Auto-speak if enabled
-            if "speak" in self.mcp_server.tools:
-                print("   [DEBUG] Direct response - calling speak tool")
+            # Auto-speak via Voice Daemon (HIGH priority - interrupts file reading)
+            if self.mcp_server.voice_daemon:
+                print("   [DEBUG] Direct response - queueing via Voice Daemon (HIGH priority)")
+                self.mcp_server.voice_daemon.speak_immediately(text=content)
+            elif "speak" in self.mcp_server.tools:
+                # Fallback to direct TTS if voice daemon not available
+                print("   [DEBUG] Voice daemon not available - using direct TTS")
                 await self.mcp_server.tools["speak"].execute(text=content)
             
             # Update conversation history with metadata
@@ -352,9 +357,15 @@ class VoiceAssistant:
                 print(f"🤖 Assistant: {final_content}")
                 
                 # Only auto-speak if LLM didn't already call speak tool
-                if not speak_called and "speak" in self.mcp_server.tools:
-                    print("   [DEBUG] Auto-speaking final response (LLM didn't call speak)")
-                    await self.mcp_server.tools["speak"].execute(text=final_content)
+                if not speak_called:
+                    if self.mcp_server.voice_daemon:
+                        # Use Voice Daemon (HIGH priority - interrupts file reading)
+                        print("   [DEBUG] Auto-speaking via Voice Daemon (HIGH priority)")
+                        self.mcp_server.voice_daemon.speak_immediately(text=final_content)
+                    elif "speak" in self.mcp_server.tools:
+                        # Fallback to direct TTS
+                        print("   [DEBUG] Auto-speaking final response (LLM didn't call speak)")
+                        await self.mcp_server.tools["speak"].execute(text=final_content)
                 elif speak_called:
                     print("   [DEBUG] Skipping auto-speak (LLM already called speak tool)")
                 

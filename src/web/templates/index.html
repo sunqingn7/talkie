@@ -166,7 +166,7 @@
                             <i class="fas fa-language"></i>
                             <h3>Text-to-Speech Model</h3>
                         </div>
-                        <div class="card-body">
+                        <div class="card-body" style="overflow-y: auto; max-height: 450px;">
                             <p class="card-description">Configure speech synthesis settings</p>
                             
                             <!-- TTS Engine Selector -->
@@ -317,34 +317,6 @@
                         </div>
                     </div>
                     
-                    <!-- System Status -->
-                    <div class="control-card">
-                        <div class="card-header">
-                            <i class="fas fa-heart-pulse"></i>
-                            <h3>System Status</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="status-list" id="system-status-list">
-                                <div class="status-item">
-                                    <span class="status-label">MCP Server</span>
-                                    <span class="status-badge" id="mcp-status">Checking...</span>
-                                </div>
-                                <div class="status-item">
-                                    <span class="status-label">LLM Client</span>
-                                    <span class="status-badge" id="llm-status">Checking...</span>
-                                </div>
-                                <div class="status-item">
-                                    <span class="status-label">Available Tools</span>
-                                    <span class="status-value" id="tools-count">-</span>
-                                </div>
-                                <div class="status-item">
-                                    <span class="status-label">Conversation Count</span>
-                                    <span class="status-value" id="conversation-count">-</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
                     <!-- Quick Tools -->
                     <div class="control-card">
                         <div class="card-header">
@@ -370,14 +342,42 @@
                     </div>
                     
                     <!-- Available Tools -->
-                    <div class="control-card wide">
+                    <div class="control-card">
                         <div class="card-header">
                             <i class="fas fa-puzzle-piece"></i>
                             <h3>Available Tools</h3>
                         </div>
-                        <div class="card-body">
+                        <div class="card-body tools-body">
                             <div class="tools-grid" id="available-tools">
                                 <!-- Tools will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- System Status -->
+                    <div class="control-card wide">
+                        <div class="card-header">
+                            <i class="fas fa-heart-pulse"></i>
+                            <h3>System Status</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="status-list" id="system-status-list">
+                                <div class="status-item">
+                                    <span class="status-label">MCP Server</span>
+                                    <span class="status-badge" id="mcp-status">Checking...</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">LLM Client</span>
+                                    <span class="status-badge" id="llm-status">Checking...</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Available Tools</span>
+                                    <span class="status-value" id="tools-count">-</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Conversation Count</span>
+                                    <span class="status-value" id="conversation-count">-</span>
+                                </div>
                             </div>
                         </div>
                     </div>

@@ -48,33 +48,83 @@ class LLMModelManager:
         # Get configured models
         configured_models = self.config.get("models", {})
         
+        # Track sharded models by their base name
+        sharded_models = {}  # base_name -> list of shard files
+        
         # Scan cache directory
         cache_path = Path(self.cache_dir)
         if cache_path.exists():
+            # First pass: collect all GGUF files
             for gguf_file in cache_path.glob("*.gguf"):
-                # Skip incomplete downloads
-                if ".downloadInProgress" in gguf_file.name:
+                # Skip incomplete downloads and etag files
+                if ".downloadInProgress" in gguf_file.name or gguf_file.name.endswith(".etag"):
                     continue
-                    
+                
+                # Check if this is a shard (contains -NNNNN-of-NNNNN pattern)
+                import re
+                shard_match = re.search(r'-(\d+)-of-(\d+)\.gguf$', gguf_file.name)
+                if shard_match:
+                    # This is a sharded model
+                    # Remove the shard suffix: "-00001-of-00004.gguf" -> ""
+                    base_name = gguf_file.name[:-(len(shard_match.group(0)))]
+                    if base_name not in sharded_models:
+                        sharded_models[base_name] = []
+                    sharded_models[base_name].append(gguf_file)
+                else:
+                    # Single file model - process immediately
+                    self._process_gguf_file(gguf_file, configured_models, available_models)
+            
+            # Process sharded models
+            for base_name, shard_files in sharded_models.items():
+                # Sort shards by name to ensure correct order
+                shard_files.sort(key=lambda x: x.name)
+                
+                # Calculate total size
+                total_size = sum(f.stat().st_size for f in shard_files)
+                total_size_gb = total_size / (1024**3)
+                
                 # Find matching config
                 model_id = None
                 model_config = None
                 
                 for mid, mconfig in configured_models.items():
-                    if mconfig.get("file") == gguf_file.name:
+                    if base_name in (mconfig.get("file", "")):
                         model_id = mid
                         model_config = mconfig
                         break
                 
                 # If no config found, create basic info
                 if not model_config:
-                    model_id = gguf_file.stem.replace("_", "-").lower()
-                    size_gb = gguf_file.stat().st_size / (1024**3)
+                    # Extract nice name from base_name
+                    # Handle patterns like "unsloth_MiniMax-M2.5-GGUF_MXFP4_MOE_MiniMax-M2.5-MXFP4_MOE"
+                    # Try to extract a cleaner name
+                    nice_name = base_name
+                    # Remove common prefixes
+                    for prefix in ['unsloth_', 'gguf_', 'model_']:
+                        if nice_name.lower().startswith(prefix):
+                            nice_name = nice_name[len(prefix):]
+                    # Replace separators with spaces
+                    nice_name = nice_name.replace("_", " ").replace("-", " ").strip()
+                    # Remove duplicate words (case insensitive)
+                    words = nice_name.split()
+                    unique_words = []
+                    seen_lower = set()
+                    for word in words:
+                        if word.lower() not in seen_lower:
+                            unique_words.append(word)
+                            seen_lower.add(word.lower())
+                    nice_name = " ".join(unique_words)
+                    # Title case
+                    nice_name = nice_name.title()
+                    
+                    model_id = base_name.replace("_", "-").lower()
                     model_config = {
-                        "name": gguf_file.stem.replace("_", " ").replace("-", " ").title(),
-                        "description": f"Model file: {gguf_file.name}",
-                        "file": gguf_file.name,
-                        "size": f"{size_gb:.1f}GB",
+                        "name": nice_name,
+                        "description": f"Sharded model: {len(shard_files)} files, {total_size_gb:.1f}GB total",
+                        "file": base_name,
+                        "shard_files": [f.name for f in shard_files],
+                        "size": f"{total_size_gb:.1f}GB",
+                        "sharded": True,
                         "quantization": "Unknown",
                         "recommended_for": ["general"],
                         "llama_server_params": self._get_default_params()
@@ -83,7 +133,7 @@ class LLMModelManager:
                 available_models.append({
                     "id": model_id,
                     **model_config,
-                    "path": str(gguf_file),
+                    "path": str(shard_files[0].parent / base_name),  # Path to first shard
                     "exists": True
                 })
         
@@ -98,6 +148,47 @@ class LLMModelManager:
                 })
         
         return available_models
+    
+    def _process_gguf_file(self, gguf_file, configured_models, available_models):
+        """Process a single GGUF file."""
+        # Find matching config
+        model_id = None
+        model_config = None
+        
+        for mid, mconfig in configured_models.items():
+            if mconfig.get("file") == gguf_file.name:
+                model_id = mid
+                model_config = mconfig
+                break
+        
+        # If config found, use it
+        if model_config:
+            available_models.append({
+                "id": model_id,
+                **model_config,
+                "path": str(gguf_file),
+                "exists": True
+            })
+        else:
+            # If no config found, create basic info
+            model_id = gguf_file.stem.replace("_", "-").lower()
+            size_gb = gguf_file.stat().st_size / (1024**3)
+            model_config = {
+                "name": gguf_file.stem.replace("_", " ").replace("-", " ").title(),
+                "description": f"Model file: {gguf_file.name}",
+                "file": gguf_file.name,
+                "size": f"{size_gb:.1f}GB",
+                "quantization": "Unknown",
+                "recommended_for": ["general"],
+                "llama_server_params": self._get_default_params()
+            }
+            
+            available_models.append({
+                "id": model_id,
+                **model_config,
+                "path": str(gguf_file),
+                "exists": True
+            })
     
     def _get_default_params(self) -> dict:
         """Get default llama-server parameters."""
@@ -122,7 +213,9 @@ class LLMModelManager:
         # Check if llama-server is running
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                if proc.info['name'] == 'llama-server':
+                # Check for llama-server process name (could be full path or just 'llama-server')
+                proc_name = proc.info['name'] or ''
+                if proc_name == 'llama-server' or 'llama-server' in proc_name:
                     cmdline = proc.info['cmdline'] or []
                     
                     # Extract model info from command line
@@ -135,16 +228,30 @@ class LLMModelManager:
                             model_path = arg[2:]
                             break
                     
-                    # Also check for --hf flag (HuggingFace download)
+                    # Also check for -hf or --hf flag (HuggingFace download)
                     if not model_path:
                         for i, arg in enumerate(cmdline):
-                            if arg.startswith('--hf'):
-                                model_path = arg
+                            if arg in ['-hf', '--hf'] and i + 1 < len(cmdline):
+                                model_path = cmdline[i + 1]
                                 break
+                            elif arg.startswith('-hf') and len(arg) > 3:
+                                model_path = arg[3:]  # -hf model_name
+                                break
+                            elif arg.startswith('--hf='):
+                                model_path = arg[5:]  # --hf=model_name
+                                break
+                    
+                    # Extract a friendly model name
+                    model_name = model_path or ""
+                    if '/' in model_name:
+                        # Handle HuggingFace model IDs like "unsloth/MiniMax-M2.5-GGUF:MXFP4_MOE"
+                        model_name = model_name.split('/')[-1].split(':')[-1]
+                        model_name = model_name.replace("_", " ").replace("-", " ").title()
                     
                     return {
                         "pid": proc.info['pid'],
                         "model_path": model_path,
+                        "model_name": model_name,
                         "cmdline": cmdline,
                         "running": True
                     }
