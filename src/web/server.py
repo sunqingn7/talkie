@@ -396,9 +396,32 @@ class WebTalkieInterface:
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
             has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
+            has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
 
-            # If LLM expressed reading intent but didn't call the tool, auto-trigger reading
-            if has_reading_intent and not has_called_read_tool:
+            # If LLM fetched attachment content but didn't call read_file_aloud, auto-trigger reading
+            if has_fetched_attachment and not has_called_read_tool:
+                print(f"[Auto Read] LLM fetched attachment but didn't call read_file_aloud. Auto-triggering...")
+                # Get the content from the tool result
+                attachment_tool_result = next((tr for tr in tool_results if tr["tool"] == "get_attachment_content"), None)
+                if attachment_tool_result:
+                    try:
+                        result_data = json.loads(attachment_tool_result["result"])
+                        if result_data.get("success") and result_data.get("content"):
+                            content = result_data["content"]
+                            filename = result_data.get("attachment", {}).get("filename", "the file")
+                            print(f"[Auto Read] Auto-reading fetched file: {filename}")
+                            asyncio.create_task(self.read_file_aloud(
+                                content=content,
+                                start_paragraph=1,
+                                language="auto"
+                            ))
+                            final_content += f"\n\n📖 *Now reading {filename}... Say 'stop reading' to pause.*"
+                            has_called_read_tool = True  # Mark as called for skip_voice
+                    except json.JSONDecodeError as e:
+                        print(f"[Auto Read] Failed to parse attachment result: {e}")
+
+            # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
+            elif has_reading_intent and not has_called_read_tool:
                 print(f"[Auto Read] LLM said it will read but didn't call read_file_aloud. Auto-triggering...")
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
@@ -413,9 +436,10 @@ class WebTalkieInterface:
                             language="auto"
                         ))
                         final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
+                        has_called_read_tool = True  # Mark as called for skip_voice
 
             # If LLM called the tool but didn't say anything about reading, add a note
-            if has_called_read_tool and not has_reading_intent:
+            if has_called_read_tool and not has_reading_intent and not has_fetched_attachment:
                 print(f"[Auto Read] Tool was called but LLM didn't acknowledge. Adding note...")
                 final_content += "\n\n📖 *Reading the file now... Say 'stop reading' to pause.*"
             
@@ -464,13 +488,24 @@ You have access to session memory tools that allow you to recall previous conver
 
 1. search_session_memory - Search chat history by keywords (e.g., "weather", "file", "read")
 2. get_recent_attachments - List recently uploaded files when user refers to "the file I uploaded"
-3. get_attachment_content - Retrieve full content of a previously uploaded file (IMPORTANT: you must use this to get file content before reading)
+3. get_attachment_content - Retrieve full content of a previously uploaded file
 4. get_session_context - Get overview of session (topics discussed, files available)
 5. get_last_user_request - Retrieve user's previous request when they say "let's redo" or "again"
+6. read_file_aloud - ACTUALLY READS FILE CONTENT ALOUD using text-to-speech
 
-IMPORTANT - When user asks you to READ A FILE:
-1. First use get_recent_attachments to find the file, OR use get_attachment_content if you know the filename
-2. Then call read_file_aloud tool with the content parameter to actually start reading
+CRITICAL INSTRUCTION - When user asks you to READ A FILE ALOUD:
+You MUST call TWO tools in sequence:
+1. First: get_attachment_content to get the file content
+2. Second: read_file_aloud with the content parameter to actually start reading
+
+DO NOT just acknowledge that you will read it - you MUST call read_file_aloud tool.
+The read_file_aloud tool will queue the content for text-to-speech playback.
+
+Example workflow:
+User: "Read the file I uploaded"
+You: [call get_attachment_content to get the file content]
+[Tool returns file content]
+You: [call read_file_aloud with content="file content here"]
 
 Use these tools when:
 - User asks to "redo", "do that again", "repeat" - use get_last_user_request
