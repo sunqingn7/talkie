@@ -461,6 +461,7 @@ class TalkieApp {
                 break;
                 
             case 'assistant_message':
+                console.log('[Assistant Message] skip_voice:', data.skip_voice);
                 this.addAssistantMessage(data.content, data.tool_calls, data.skip_voice);
                 this.hideThinking();
                 break;

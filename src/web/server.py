@@ -434,7 +434,8 @@ class WebTalkieInterface:
             # Determine if we should skip auto-speaking the response
             # Skip when read_file_aloud was called because the file content will be spoken instead
             skip_voice = has_called_read_tool
-            
+            print(f"[Assistant Response] skip_voice={skip_voice}, has_called_read_tool={has_called_read_tool}")
+
             return {
                 "type": "assistant_message",
                 "content": final_content,
