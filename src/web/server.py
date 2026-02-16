@@ -387,6 +387,30 @@ class WebTalkieInterface:
         
         if "choices" in final_response:
             final_content = final_response["choices"][0]["message"].get("content", "")
+            
+            # Check if LLM said it will read but didn't actually call read_file_aloud
+            # This happens when user references a past file
+            reading_intent_phrases = ['read this', 'reading', 'will read', 'start reading', 
+                                      'narrate', 'speak aloud', 'read it', 'read aloud']
+            has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
+            has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
+            
+            if has_reading_intent and not has_called_read_tool:
+                print(f"[Auto Read] LLM indicated reading intent but didn't call read_file_aloud. Auto-triggering...")
+                # Try to get most recent attachment and read it
+                recent_attachments = self.session_memory.get_recent_attachments(1)
+                if recent_attachments:
+                    attachment = recent_attachments[0]
+                    content = self.session_memory.get_attachment_content(attachment['id'])
+                    if content:
+                        print(f"[Auto Read] Auto-reading file: {attachment['filename']}")
+                        asyncio.create_task(self.read_file_aloud(
+                            content=content,
+                            start_paragraph=1,
+                            language="auto"
+                        ))
+                        final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
+            
             self._add_to_history(original_input, final_content, tool_results)
             
             # Record assistant response with tool results in session memory
@@ -426,15 +450,20 @@ You have access to session memory tools that allow you to recall previous conver
 
 1. search_session_memory - Search chat history by keywords (e.g., "weather", "file", "read")
 2. get_recent_attachments - List recently uploaded files when user refers to "the file I uploaded"
-3. get_attachment_content - Retrieve full content of a previously uploaded file
+3. get_attachment_content - Retrieve full content of a previously uploaded file (IMPORTANT: you must use this to get file content before reading)
 4. get_session_context - Get overview of session (topics discussed, files available)
 5. get_last_user_request - Retrieve user's previous request when they say "let's redo" or "again"
+
+IMPORTANT - When user asks you to READ A FILE:
+1. First use get_recent_attachments to find the file, OR use get_attachment_content if you know the filename
+2. Then call read_file_aloud tool with the content parameter to actually start reading
 
 Use these tools when:
 - User asks to "redo", "do that again", "repeat" - use get_last_user_request
 - User refers to "the file I uploaded", "that document" - use get_recent_attachments or get_attachment_content
 - User says "as I mentioned before" or references previous topics - use search_session_memory
 - User asks about conversation history - use get_session_context
+- User asks you to read a file aloud - use get_attachment_content THEN read_file_aloud
 
 Always proactively use these tools when the user references past interactions.
 """
