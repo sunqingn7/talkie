@@ -398,10 +398,11 @@ class WebTalkieInterface:
             # Check for reading tools
             has_called_read_tool = any(tr["tool"] in ["read_file_aloud", "read_file_chunk"] for tr in tool_results)
             has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
+            has_fetched_recent_attachments = any(tr["tool"] == "get_recent_attachments" for tr in tool_results)
             has_stop_reading = any(tr["tool"] in ["stop_reading", "stop_file_reading"] for tr in tool_results)
             has_read_file_chunk = any(tr["tool"] == "read_file_chunk" for tr in tool_results)
 
-            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}")
+            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_fetched_recent={has_fetched_recent_attachments}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}")
             print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger
@@ -439,6 +440,34 @@ class WebTalkieInterface:
                         has_called_read_tool = True
                 else:
                     print(f"[Auto Read] No content found to read")
+
+            # If get_recent_attachments was called, auto-trigger reading of the most recent file
+            elif has_fetched_recent_attachments and not has_called_read_tool and not has_stop_reading:
+                print(f"[Auto Read] Recent attachments fetched but read not called. Auto-triggering...")
+                # Try to get most recent attachment and read it
+                recent_attachments = self.session_memory.get_recent_attachments(1)
+                if recent_attachments:
+                    attachment = recent_attachments[0]
+                    content = self.session_memory.get_attachment_content(attachment['id'])
+                    if content:
+                        print(f"[Auto Read] Auto-reading file: {attachment['filename']}")
+                        if self.mcp_server and "read_file_chunk" in self.mcp_server.tools:
+                            tool = self.mcp_server.tools["read_file_chunk"]
+                            asyncio.create_task(tool.execute())
+                            final_content += f"\n\n📖 *Reading {attachment['filename']}... Say 'stop' to stop.*"
+                            has_called_read_tool = True
+                        else:
+                            asyncio.create_task(self.read_file_aloud(
+                                content=content,
+                                start_paragraph=1,
+                                language="auto"
+                            ))
+                            final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
+                            has_called_read_tool = True
+                    else:
+                        print(f"[Auto Read] No content found for recent attachment")
+                else:
+                    print(f"[Auto Read] No recent attachments found")
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
             elif has_reading_intent and not has_called_read_tool and not has_stop_reading:
