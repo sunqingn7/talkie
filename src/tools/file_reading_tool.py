@@ -169,11 +169,13 @@ class FileReadingTool(BaseTool):
     
     async def execute(self, file_id: str = None, filename: str = None) -> Dict[str, Any]:
         """Start reading the file in background, chunk by chunk."""
-        print(f"[FileReading] execute() called with file_id={file_id}, filename={filename}")
+        print(f"[FileReading] execute() called with file_id={file_id}, filename={filename}, is_reading={self.is_reading}")
         
-        # Check if we need to load a file
-        if not self.is_reading or (file_id and file_id != self.current_file_id):
-            print(f"[FileReading] Need to load file, is_reading={self.is_reading}")
+        # Check if we need to load a file (BEFORE setting is_reading flag)
+        needs_load = not self.is_reading or (file_id and file_id != self.current_file_id)
+        
+        if needs_load:
+            print(f"[FileReading] Need to load file")
             success, message = self._load_file(file_id, filename)
             if not success:
                 return {
@@ -183,32 +185,27 @@ class FileReadingTool(BaseTool):
                 }
             print(f"[FileReading] {message}")
         
-        # If already reading, just return status
-        if self.is_reading:
-            print(f"[FileReading] Already reading, returning status")
-            progress_percent = int((self.words_read / self.total_words) * 100) if self.total_words > 0 else 0
-            chunks = self._split_into_chunks(self.current_content, self.chunk_size)
-            more_content = self.current_position < len(chunks)
-            
+        # Check if we already started the background thread for this file
+        # Use current_content to determine if we need to start thread
+        if not self.current_content:
+            print(f"[FileReading] No content loaded, returning error")
             return {
-                "success": True,
-                "status": "already_reading",
-                "message": f"Already reading: {self.words_read}/{self.total_words} words ({progress_percent}%)",
-                "words_read": self.words_read,
-                "total_words": self.total_words,
-                "progress_percent": progress_percent,
-                "more_content": more_content
+                "success": False,
+                "error": "No file content loaded",
+                "status": "no_file"
             }
         
-        # Start background reading thread
-        print(f"[FileReading] Starting background thread...")
-        self.is_reading = True
-        self.current_position = 0
-        self.words_read = 0
-        
-        reading_thread = threading.Thread(target=self._read_background, daemon=True)
-        reading_thread.start()
-        print(f"[FileReading] Thread started, is_alive={reading_thread.is_alive()}")
+        # Check if we need to start the background thread
+        # We start it if we just loaded the file (needs_load=True) OR if no thread was started yet (current_position=0)
+        if needs_load or self.current_position == 0:
+            print(f"[FileReading] Starting background thread... (needs_load={needs_load}, position={self.current_position})")
+            self.is_reading = True
+            self.current_position = 0
+            self.words_read = 0
+            
+            reading_thread = threading.Thread(target=self._read_background, daemon=True)
+            reading_thread.start()
+            print(f"[FileReading] Thread started, is_alive={reading_thread.is_alive()}")
         
         chunks = self._split_into_chunks(self.current_content, self.chunk_size)
         
