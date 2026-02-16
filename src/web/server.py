@@ -398,6 +398,9 @@ class WebTalkieInterface:
             has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
             has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
 
+            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}")
+            print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
+
             # If LLM fetched attachment content but didn't call read_file_aloud, auto-trigger reading
             if has_fetched_attachment and not has_called_read_tool:
                 print(f"[Auto Read] LLM fetched attachment but didn't call read_file_aloud. Auto-triggering...")
@@ -406,10 +409,11 @@ class WebTalkieInterface:
                 if attachment_tool_result:
                     try:
                         result_data = json.loads(attachment_tool_result["result"])
+                        print(f"[Auto Read] Debug: attachment result keys={result_data.keys() if isinstance(result_data, dict) else 'not dict'}")
                         if result_data.get("success") and result_data.get("content"):
                             content = result_data["content"]
                             filename = result_data.get("attachment", {}).get("filename", "the file")
-                            print(f"[Auto Read] Auto-reading fetched file: {filename}")
+                            print(f"[Auto Read] Auto-reading fetched file: {filename} (content length: {len(content)})")
                             asyncio.create_task(self.read_file_aloud(
                                 content=content,
                                 start_paragraph=1,
@@ -417,8 +421,12 @@ class WebTalkieInterface:
                             ))
                             final_content += f"\n\n📖 *Now reading {filename}... Say 'stop reading' to pause.*"
                             has_called_read_tool = True  # Mark as called for skip_voice
-                    except json.JSONDecodeError as e:
-                        print(f"[Auto Read] Failed to parse attachment result: {e}")
+                        else:
+                            print(f"[Auto Read] Debug: attachment result success={result_data.get('success')}, has_content={bool(result_data.get('content'))}")
+                    except Exception as e:
+                        print(f"[Auto Read] Failed to parse/process attachment result: {e}")
+                        import traceback
+                        traceback.print_exc()
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
             elif has_reading_intent and not has_called_read_tool:
