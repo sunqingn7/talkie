@@ -392,17 +392,18 @@ class WebTalkieInterface:
             final_content = final_response["choices"][0]["message"].get("content", "")
             
             # Check if reading-related tools were called or intent was expressed
-            reading_intent_phrases = ['read this', 'reading', 'will read', 'start reading',
+            reading_intent_phrases = ['read this', 'will read', 'start reading',
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
             has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
             has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
+            has_stop_reading = any(tr["tool"] == "stop_reading" for tr in tool_results)
 
-            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}")
+            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_stop_reading={has_stop_reading}")
             print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
 
             # If LLM fetched attachment content but didn't call read_file_aloud, auto-trigger reading
-            if has_fetched_attachment and not has_called_read_tool:
+            if has_fetched_attachment and not has_called_read_tool and not has_stop_reading:
                 print(f"[Auto Read] LLM fetched attachment but didn't call read_file_aloud. Auto-triggering...")
                 # Get the content from the tool result
                 attachment_tool_result = next((tr for tr in tool_results if tr["tool"] == "get_attachment_content"), None)
@@ -429,7 +430,7 @@ class WebTalkieInterface:
                         traceback.print_exc()
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
-            elif has_reading_intent and not has_called_read_tool:
+            elif has_reading_intent and not has_called_read_tool and not has_stop_reading:
                 print(f"[Auto Read] LLM said it will read but didn't call read_file_aloud. Auto-triggering...")
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
