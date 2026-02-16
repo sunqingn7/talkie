@@ -48,14 +48,12 @@ class TalkieMCPServer:
         # Initialize Voice Daemon with TTS tool
         self.voice_daemon = get_voice_daemon(self.tools["speak"])
         
-        # Register TTS reader tools for reading files with paragraph-by-paragraph TTS
-        # These now use the voice daemon internally
-        from tools.tts_reader_tool import TTSReaderTool, StopReadingTool
-        self.tools["read_file_aloud"] = TTSReaderTool(self.config)
-        self.tools["read_file_aloud"].set_voice_daemon(self.voice_daemon)
-        
-        self.tools["stop_reading"] = StopReadingTool(self.config)
-        self.tools["stop_reading"].set_reader_tool(self.tools["read_file_aloud"])
+        # OLD TTS reader tools - commented out, use new chunk-based read_file_chunk instead
+        # from tools.tts_reader_tool import TTSReaderTool, StopReadingTool
+        # self.tools["read_file_aloud"] = TTSReaderTool(self.config)
+        # self.tools["read_file_aloud"].set_voice_daemon(self.voice_daemon)
+        # self.tools["stop_reading"] = StopReadingTool(self.config)
+        # self.tools["stop_reading"].set_reader_tool(self.tools["read_file_aloud"])
         
         # Register Voice Daemon control tools
         from tools.voice_daemon_tool import VoiceDaemonStatusTool, VoiceDaemonStopTool, VoiceDaemonSkipTool
