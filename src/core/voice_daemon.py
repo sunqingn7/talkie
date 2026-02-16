@@ -99,26 +99,30 @@ class VoiceDaemon:
         print("[VoiceDaemon] Started")
     
     def stop(self):
-        """Stop the voice daemon."""
+        """Stop the voice daemon completely."""
         if not self.is_running:
             return
-        
-        print("[VoiceDaemon] Stopping...")
-        self.stop_event.set()
-        
+
+        print("[VoiceDaemon] Stopping daemon...")
+        # Set flag to stop daemon loop
+        self._daemon_stop = True
+
         # Clear the queue
         while not self.speech_queue.empty():
             try:
                 self.speech_queue.get_nowait()
             except queue.Empty:
                 break
-        
+
         # Wait for thread to finish
         if self.daemon_thread and self.daemon_thread.is_alive():
             self.daemon_thread.join(timeout=3.0)
-        
+
         self.is_running = False
         self.is_speaking = False
+        # Clean up the stop flag
+        if hasattr(self, '_daemon_stop'):
+            delattr(self, '_daemon_stop')
         print("[VoiceDaemon] Stopped")
     
     def _daemon_loop(self):
@@ -126,17 +130,28 @@ class VoiceDaemon:
         # Create event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
+
         try:
-            while not self.stop_event.is_set():
+            while True:
                 try:
+                    # Check if daemon should stop completely
+                    if hasattr(self, '_daemon_stop'):
+                        break
+
                     # Get next speech request (blocking with timeout)
                     request = self.speech_queue.get(timeout=0.5)
                     self.queue_size = self.speech_queue.qsize()
-                    
+
+                    # Check if stop was requested (for current speech only)
+                    if self.stop_event.is_set():
+                        # Just reset and continue - queue was cleared
+                        self.stop_event.clear()
+                        print("[VoiceDaemon] Stop signal received, queue cleared, continuing...")
+                        continue
+
                     # Process the speech request
                     self._process_speech(request, loop)
-                    
+
                 except queue.Empty:
                     # No items in queue
                     self.queue_size = 0
@@ -149,7 +164,7 @@ class VoiceDaemon:
                 except Exception as e:
                     print(f"[VoiceDaemon] Error in daemon loop: {e}")
                     time.sleep(0.1)
-        
+
         finally:
             # Clean up event loop
             try:
@@ -213,9 +228,19 @@ class VoiceDaemon:
                 if result.get('success'):
                     # Estimate wait time based on text length
                     estimated_duration = len(request.text) / 15  # ~15 chars per second
-                    print(f"[VoiceDaemon] Sleeping for {estimated_duration:.1f}s to let speech play")
-                    time.sleep(min(estimated_duration + 0.5, 30))
-                    print(f"[VoiceDaemon] Finished speaking: {short_text}")
+                    wait_time = min(estimated_duration + 0.5, 30)
+                    print(f"[VoiceDaemon] Sleeping for {wait_time:.1f}s to let speech play")
+                    
+                    # Sleep in small chunks to allow interruption
+                    sleep_start = time.time()
+                    while time.time() - sleep_start < wait_time:
+                        if self.stop_event.is_set():
+                            print(f"[VoiceDaemon] Sleep interrupted by stop signal")
+                            break
+                        time.sleep(0.1)  # Check every 100ms
+                    
+                    if not self.stop_event.is_set():
+                        print(f"[VoiceDaemon] Finished speaking: {short_text}")
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
             except Exception as e:
@@ -361,6 +386,9 @@ class VoiceDaemon:
         """Stop the current speech and clear the queue."""
         was_speaking = self.is_speaking
         
+        # Signal stop to interrupt ongoing speech/sleep
+        self.stop_event.set()
+        
         # Clear queue
         cleared_count = 0
         while not self.speech_queue.empty():
@@ -371,6 +399,9 @@ class VoiceDaemon:
                 break
         
         self.queue_size = 0
+        
+        # Reset stop event after a short delay to allow processing to stop
+        # The daemon loop will clear it after processing the stop
         
         return {
             "success": True,
