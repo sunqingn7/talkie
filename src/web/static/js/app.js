@@ -461,7 +461,7 @@ class TalkieApp {
                 break;
                 
             case 'assistant_message':
-                this.addAssistantMessage(data.content, data.tool_calls);
+                this.addAssistantMessage(data.content, data.tool_calls, data.skip_voice);
                 this.hideThinking();
                 break;
                 
@@ -691,11 +691,11 @@ class TalkieApp {
         this.scrollToBottom();
     }
     
-    addAssistantMessage(content, toolCalls = null) {
+    addAssistantMessage(content, toolCalls = null, skipVoice = false) {
         const messages = document.getElementById('messages');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message assistant';
-        
+
         let toolInfo = '';
         if (toolCalls && this.showToolDetails) {
             toolInfo = `
@@ -704,7 +704,7 @@ class TalkieApp {
                 </div>
             `;
         }
-        
+
         messageDiv.innerHTML = `
             <div class="message-avatar"><i class="fas fa-robot"></i></div>
             <div class="message-content">
@@ -715,9 +715,10 @@ class TalkieApp {
         `;
         messages.appendChild(messageDiv);
         this.scrollToBottom();
-        
+
         // Voice output - use backend TTS with selected speaker
-        if (this.voiceOutputEnabled) {
+        // Skip voice if explicitly requested (e.g., when file reading is handling speech)
+        if (this.voiceOutputEnabled && !skipVoice) {
             this.speakTextBackend(content);
         }
     }

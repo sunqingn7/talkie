@@ -391,14 +391,14 @@ class WebTalkieInterface:
         if "choices" in final_response:
             final_content = final_response["choices"][0]["message"].get("content", "")
             
-            # Check if LLM said it will read but didn't actually call read_file_aloud
-            # This happens when user references a past file
+            # Check if reading-related tools were called or intent was expressed
             reading_intent_phrases = ['read this', 'reading', 'will read', 'start reading', 
                                       'narrate', 'speak aloud', 'read it', 'read aloud']
             has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
             has_called_read_tool = any(tr["tool"] == "read_file_aloud" for tr in tool_results)
             
-            if has_reading_intent and not has_called_read_tool:
+            # If read_file_aloud was called but LLM didn't acknowledge it, add acknowledgment
+            if has_called_read_tool and not has_reading_intent:
                 print(f"[Auto Read] LLM indicated reading intent but didn't call read_file_aloud. Auto-triggering...")
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
@@ -426,10 +426,15 @@ class WebTalkieInterface:
                 }
             )
             
+            # Determine if we should skip auto-speaking the response
+            # Skip when read_file_aloud was called because the file content will be spoken instead
+            skip_voice = has_called_read_tool
+            
             return {
                 "type": "assistant_message",
                 "content": final_content,
                 "tool_calls": tool_results,
+                "skip_voice": skip_voice,  # Tell frontend not to auto-speak this
                 "timestamp": datetime.now().isoformat()
             }
         else:
