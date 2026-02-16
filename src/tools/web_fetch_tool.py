@@ -86,14 +86,14 @@ class WebFetchTool(BaseTool):
         text = re.sub(r' +', ' ', text)
         text = re.sub(r'\t+', '\t', text)
         
-        # Remove lines that are just URLs
+        # Simple cleanup - remove lines that are only URLs
         lines = text.split('\n')
         cleaned_lines = []
         for line in lines:
             line = line.strip()
-            # Skip lines that are mostly URLs
+            # Skip empty lines and URL-only lines
             if line and not re.match(r'^https?://', line):
-                if len(line) > 10:  # Skip very short lines
+                if len(line) > 5:  # Skip very short lines
                     cleaned_lines.append(line)
         
         return '\n'.join(cleaned_lines)
@@ -105,51 +105,14 @@ class WebFetchTool(BaseTool):
             
             soup = BeautifulSoup(html, 'html.parser')
             
-            print(f"[WebFetch] soup.body: {soup.body is not None}")
-            
             # Remove unwanted tags
             for tag in soup(self.REMOVE_TAGS):
                 tag.decompose()
             
-            # Remove elements with unwanted classes
-            for elem in soup.find_all(class_=True):
-                try:
-                    class_list = elem.get('class', [])
-                    if class_list:
-                        class_name = ' '.join(class_list).lower()
-                        if any(c in class_name for c in self.REMOVE_CLASSES):
-                            elem.decompose()
-                except:
-                    pass
-            
-            # Try to find main content areas (simplified)
-            main_content = soup.find('article')
-            if not main_content:
-                main_content = soup.find('main')
-            if not main_content:
-                # Try common content divs
-                for div in soup.find_all('div'):
-                    if div.get('class'):
-                        class_str = ' '.join(div.get('class', []))
-                        if 'content' in class_str or 'article' in class_str or 'post' in class_str:
-                            main_content = div
-                            break
-                    if div.get('id'):
-                        id_str = div.get('id', '')
-                        if 'content' in id_str or 'article' in id_str or 'post' in id_str:
-                            main_content = div
-                            break
-                    if not main_content and len(str(div)) > 10000:
-                        # Found a large div, might be main content
-                        main_content = div
-            
-            if not main_content:
-                main_content = soup.body
-            
-            print(f"[WebFetch] main_content found: {type(main_content)}")
-            
-            if main_content:
-                text = main_content.get_text(separator='\n', strip=True)
+            # Get text from body directly
+            text = ""
+            if soup.body:
+                text = soup.body.get_text(separator='\n', strip=True)
             else:
                 text = soup.get_text(separator='\n', strip=True)
             
