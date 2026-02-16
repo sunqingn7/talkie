@@ -269,7 +269,10 @@ class WebTalkieInterface:
             # Format tools for LLM - exclude 'speak' tool as web interface handles TTS
             tools_dict = {k: v for k, v in self.mcp_server.tools.items() if k != 'speak'}
             tools = self.llm_client.format_tools_for_llm(tools_dict)
-            
+
+            # Debug: Log available tools
+            print(f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}")
+
             # Get LLM response
             response = self.llm_client.chat_completion(messages, tools=tools)
             
