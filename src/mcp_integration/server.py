@@ -113,6 +113,7 @@ class TalkieMCPServer:
         if "web_fetch" in enabled:
             from tools.web_fetch_tool import WebFetchTool
             self.tools["web_fetch"] = WebFetchTool(self.config)
+            self.tools["web_fetch"].set_voice_daemon(self.voice_daemon)
             
         if "datetime" in enabled:
             from tools.datetime_tool import DateTimeTool

@@ -70,6 +70,11 @@ class WebFetchTool(BaseTool):
     def __init__(self, config: dict):
         super().__init__(config)
         self.config = config
+        self.voice_daemon = None  # Will be set by MCP server
+    
+    def set_voice_daemon(self, voice_daemon):
+        """Set the voice daemon for reading aloud."""
+        self.voice_daemon = voice_daemon
     
     def _is_valid_url(self, url: str) -> bool:
         """Check if URL is valid."""
@@ -265,11 +270,39 @@ class WebFetchTool(BaseTool):
             "char_count": len(content)
         }
         
-        # If read_aloud is requested, return info about it
-        # (actual reading will be handled by the caller)
-        if read_aloud:
-            result["read_aloud"] = True
-            result["message"] = f"Ready to read {word_count} words from {title or 'webpage'}"
+        # If read_aloud is requested, read the content via VoiceDaemon
+        if read_aloud and self.voice_daemon:
+            print(f"[WebFetch] read_aloud=True, queuing content for reading...")
+            
+            # Split content into chunks for reading
+            chunks = []
+            current_chunk = ""
+            
+            for paragraph in content.split('\n\n'):
+                if len(current_chunk) + len(paragraph) > 800:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    current_chunk = paragraph[:800]
+                else:
+                    if current_chunk:
+                        current_chunk += "\n\n" + paragraph
+                    else:
+                        current_chunk = paragraph
+            
+            if current_chunk:
+                chunks.append(current_chunk)
+            
+            # Queue chunks for reading
+            for i, chunk in enumerate(chunks):
+                self.voice_daemon.speak_file_content(
+                    text=chunk,
+                    paragraph_num=i+1,
+                    language=language
+                )
+            
+            result["message"] = f"Reading {len(chunks)} chunks from {title or 'webpage'}"
+            result["is_reading"] = True
+            print(f"[WebFetch] Queued {len(chunks)} chunks for reading")
         
         return result
     
