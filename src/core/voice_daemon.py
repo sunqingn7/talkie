@@ -68,6 +68,12 @@ class VoiceDaemon:
         self.current_text = ""
         self.queue_size = 0
         self.current_audio_process: Optional[subprocess.Popen] = None  # Track current playing audio
+        self.current_priority: Optional[Priority] = None  # Track priority of current speech
+        
+        # Pause/Resume tracking for file reading
+        self.paused_file_request: Optional[SpeechRequest] = None  # Stores interrupted file reading
+        self.interrupted_by_high_priority = threading.Event()  # Signal that high priority interrupted
+        
         self.stats = {
             "total_speeches": 0,
             "high_priority": 0,
@@ -186,6 +192,7 @@ class VoiceDaemon:
         
         self.is_speaking = True
         self.current_text = request.text
+        self.current_priority = request.priority  # Track priority for interruption logic
         self.stats["total_speeches"] += 1
         
         if request.priority == Priority.HIGH:
@@ -288,6 +295,7 @@ class VoiceDaemon:
             self.is_speaking = False
             self.current_text = ""
             self.current_audio_process = None  # Clear the audio process reference
+            self.current_priority = None  # Clear current priority
             
             # Trigger callback
             if self.on_speech_end:
@@ -330,12 +338,20 @@ class VoiceDaemon:
         
         # Handle high-priority requests
         if priority == Priority.HIGH:
-            # Clear lower priority items from queue (they'll be requeued after)
+            # Clear lower priority items from queue
             self._clear_lower_priority_items()
             
-            # If currently speaking, we'll interrupt after current speech
-            if self.is_speaking:
-                print(f"[VoiceDaemon] ⚡ High priority speech queued (will interrupt after current)")
+            # If currently speaking NORMAL priority (file reading), interrupt immediately
+            if self.is_speaking and self.current_priority == Priority.NORMAL:
+                print(f"[VoiceDaemon] ⚡ High priority speech interrupting current file reading")
+                # Store the interrupted file request for later resumption
+                # (Note: we don't know the exact position, but TTSReader will handle that)
+                self.interrupted_by_high_priority.set()
+                # Signal stop to interrupt current audio
+                self.stop_event.set()
+                print(f"[VoiceDaemon] ⚡ Interrupted file reading to play high priority speech")
+            elif self.is_speaking:
+                print(f"[VoiceDaemon] ⚡ High priority speech queued (will play after current)")
         
         # Add to queue
         self.speech_queue.put(request)
@@ -477,6 +493,15 @@ class VoiceDaemon:
             "message": f"Stopped speech. Cleared {cleared_count} items from queue."
         }
     
+
+    def was_interrupted_by_high_priority(self) -> bool:
+        """Check if file reading was interrupted by high priority speech."""
+        return self.interrupted_by_high_priority.is_set()
+    
+    def clear_interruption_flag(self):
+        """Clear the high priority interruption flag."""
+        self.interrupted_by_high_priority.clear()
+
     def get_status(self) -> Dict[str, Any]:
         """Get current daemon status."""
         return {
