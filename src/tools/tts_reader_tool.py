@@ -129,56 +129,71 @@ class TTSReaderTool(BaseTool):
     
     def read_paragraphs_sync(self, paragraphs: List[str], start_idx: int = 0, language: str = "auto"):
         """Synchronous function to queue paragraphs via Voice Daemon."""
+        print(f"[TTSReader] Starting to read {len(paragraphs)} paragraphs from index {start_idx}")
         self.is_reading = True
         self.total_paragraphs = len(paragraphs)
-        
+
         try:
             for i in range(start_idx, len(paragraphs)):
                 # Check if stop was requested
                 if self.stop_event.is_set():
+                    print(f"[TTSReader] Stop requested, breaking at paragraph {i+1}")
                     break
-                
+
                 self.current_paragraph = i + 1
                 paragraph = paragraphs[i]
-                
+
                 # Skip very short paragraphs
                 if len(paragraph) < 10:
+                    print(f"[TTSReader] Skipping short paragraph {i+1}")
                     continue
-                
+
                 # Check stop event again before queuing
                 if self.stop_event.is_set():
+                    print(f"[TTSReader] Stop requested before queuing paragraph {i+1}")
                     break
-                
+
                 # Queue paragraph via Voice Daemon (NORMAL priority)
                 if self.voice_daemon:
                     try:
+                        print(f"[TTSReader] Queuing paragraph {i+1}/{len(paragraphs)} ({len(paragraph)} chars)")
                         result = self.voice_daemon.speak_file_content(
                             text=paragraph[:500],  # Limit to 500 chars per paragraph
                             paragraph_num=i + 1,
                             language=language if language != "auto" else "auto"
                         )
-                        
+
                         if not result.get('success'):
-                            print(f"   ⚠️  Failed to queue paragraph {i+1}: {result.get('error')}")
+                            print(f"[TTSReader] ⚠️ Failed to queue paragraph {i+1}: {result.get('error')}")
+                        else:
+                            print(f"[TTSReader] ✅ Queued paragraph {i+1}, queue position: {result.get('position')}")
                     except Exception as e:
-                        print(f"   ⚠️  Error queuing paragraph {i+1}: {e}")
+                        print(f"[TTSReader] ⚠️ Error queuing paragraph {i+1}: {e}")
+                        import traceback
+                        traceback.print_exc()
                 else:
-                    print(f"   ⚠️  Voice daemon not available")
+                    print(f"[TTSReader] ⚠️ Voice daemon not available")
                     break
-                
+
                 # Check stop event again
                 if self.stop_event.is_set():
+                    print(f"[TTSReader] Stop requested after queuing paragraph {i+1}")
                     break
-                
+
                 # Small delay between queuing paragraphs to allow processing
                 time.sleep(0.5)
-        
+
+            print(f"[TTSReader] Finished reading loop. Processed {self.current_paragraph} paragraphs")
+
         except Exception as e:
-            print(f"   ⚠️  Error in reading thread: {e}")
-        
+            print(f"[TTSReader] ⚠️ Error in reading thread: {e}")
+            import traceback
+            traceback.print_exc()
+
         finally:
             self.is_reading = False
             self.stop_event.clear()
+            print(f"[TTSReader] Reading thread ended")
     
     async def execute(self, content: str = None, file_path: str = None, 
                       start_paragraph: int = 1, language: str = "auto") -> Dict[str, Any]:
