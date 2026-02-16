@@ -159,9 +159,13 @@ class VoiceDaemon:
     
     def _process_speech(self, request: SpeechRequest, loop: asyncio.AbstractEventLoop):
         """Process a single speech request."""
+        print(f"[VoiceDaemon] _process_speech called with text: {request.text[:50]}...")
+        
         if not self.tts_tool:
             print("[VoiceDaemon] No TTS tool available")
             return
+        
+        print(f"[VoiceDaemon] TTS tool is available: {type(self.tts_tool)}")
         
         self.is_speaking = True
         self.current_text = request.text
