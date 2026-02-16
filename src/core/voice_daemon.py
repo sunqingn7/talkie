@@ -215,6 +215,12 @@ class VoiceDaemon:
                 # Since we're already in the daemon thread with the event loop,
                 # use run_until_complete instead of run_coroutine_threadsafe
                 print(f"[VoiceDaemon] Running TTS coroutine directly in event loop...")
+                
+                # Check stop before TTS
+                if self.stop_event.is_set():
+                    print(f"[VoiceDaemon] Stop requested before TTS, skipping")
+                    return
+                
                 result = loop.run_until_complete(
                     self.tts_tool.execute(
                         text=request.text,
@@ -224,6 +230,11 @@ class VoiceDaemon:
                     )
                 )
                 print(f"[VoiceDaemon] TTS result: success={result.get('success')}, error={result.get('error', 'None')}")
+                
+                # Check stop immediately after TTS completes
+                if self.stop_event.is_set():
+                    print(f"[VoiceDaemon] Stop requested after TTS, skipping wait")
+                    return
                 
                 if result.get('success'):
                     # Estimate wait time based on text length
@@ -236,11 +247,10 @@ class VoiceDaemon:
                     while time.time() - sleep_start < wait_time:
                         if self.stop_event.is_set():
                             print(f"[VoiceDaemon] Sleep interrupted by stop signal")
-                            break
+                            return
                         time.sleep(0.1)  # Check every 100ms
                     
-                    if not self.stop_event.is_set():
-                        print(f"[VoiceDaemon] Finished speaking: {short_text}")
+                    print(f"[VoiceDaemon] Finished speaking: {short_text}")
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
             except Exception as e:
