@@ -105,29 +105,55 @@ class WebFetchTool(BaseTool):
             
             soup = BeautifulSoup(html, 'html.parser')
             
+            print(f"[WebFetch] soup.body: {soup.body is not None}")
+            
             # Remove unwanted tags
             for tag in soup(self.REMOVE_TAGS):
                 tag.decompose()
             
             # Remove elements with unwanted classes
             for elem in soup.find_all(class_=True):
-                class_name = ' '.join(elem.get('class', [])).lower()
-                if any(c in class_name for c in self.REMOVE_CLASSES):
-                    elem.decompose()
+                try:
+                    class_list = elem.get('class', [])
+                    if class_list:
+                        class_name = ' '.join(class_list).lower()
+                        if any(c in class_name for c in self.REMOVE_CLASSES):
+                            elem.decompose()
+                except:
+                    pass
             
-            # Try to find main content areas
-            main_content = (
-                soup.find('article') or
-                soup.find('main') or
-                soup.find('div', class_=re.compile(r'content|article|post', re.I)) or
-                soup.find('div', id=re.compile(r'content|article|post', re.I)) or
-                soup.body
-            )
+            # Try to find main content areas (simplified)
+            main_content = soup.find('article')
+            if not main_content:
+                main_content = soup.find('main')
+            if not main_content:
+                # Try common content divs
+                for div in soup.find_all('div'):
+                    if div.get('class'):
+                        class_str = ' '.join(div.get('class', []))
+                        if 'content' in class_str or 'article' in class_str or 'post' in class_str:
+                            main_content = div
+                            break
+                    if div.get('id'):
+                        id_str = div.get('id', '')
+                        if 'content' in id_str or 'article' in id_str or 'post' in id_str:
+                            main_content = div
+                            break
+                    if not main_content and len(str(div)) > 10000:
+                        # Found a large div, might be main content
+                        main_content = div
+            
+            if not main_content:
+                main_content = soup.body
+            
+            print(f"[WebFetch] main_content found: {type(main_content)}")
             
             if main_content:
                 text = main_content.get_text(separator='\n', strip=True)
             else:
                 text = soup.get_text(separator='\n', strip=True)
+            
+            print(f"[WebFetch] Raw text length: {len(text)}")
             
             # Clean the text
             text = self._clean_text(text)
@@ -140,8 +166,12 @@ class WebFetchTool(BaseTool):
             
         except ImportError:
             # Fallback: simple regex-based extraction
+            print("[WebFetch] BeautifulSoup not available, using simple extraction")
             return self._simple_extract(html, max_length)
         except Exception as e:
+            import traceback
+            print(f"[WebFetch] Error parsing HTML: {e}")
+            traceback.print_exc()
             return f"Error parsing HTML: {str(e)}"
     
     def _simple_extract(self, html: str, max_length: int = 10000) -> str:
@@ -173,18 +203,27 @@ class WebFetchTool(BaseTool):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
             }
             
             timeout = aiohttp.ClientTimeout(total=30)
             
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, allow_redirects=True) as response:
+                    print(f"[WebFetch] Status: {response.status}, URL: {response.url}")
+                    
                     if response.status == 200:
-                        return await response.text()
+                        content = await response.text()
+                        print(f"[WebFetch] Fetched {len(content)} bytes")
+                        return content
                     else:
+                        print(f"[WebFetch] HTTP {response.status}")
                         return None
         except Exception as e:
             print(f"[WebFetch] Error fetching URL: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     async def execute(self, url: str, read_aloud: bool = False, 
@@ -215,9 +254,12 @@ class WebFetchTool(BaseTool):
         if not html:
             return {
                 "success": False,
-                "error": "Failed to fetch webpage. The URL may be inaccessible.",
+                "error": "Failed to fetch webpage. The URL may be inaccessible or requires authentication.",
                 "url": url
             }
+        
+        if len(html) < 200:
+            print(f"[WebFetch] WARNING: Very short response ({len(html)} chars): {html[:200]}")
         
         # Extract text
         content = self._extract_text_from_html(html, max_length)
@@ -234,12 +276,18 @@ class WebFetchTool(BaseTool):
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, 'html.parser')
-            if soup.title:
+            if soup.title and soup.title.string:
                 title = soup.title.string.strip()
         except:
-            title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
-            if title_match:
-                title = title_match.group(1).strip()
+            pass
+        
+        if not title:
+            try:
+                title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+                if title_match:
+                    title = title_match.group(1).strip()
+            except:
+                pass
         
         word_count = len(content.split())
         
