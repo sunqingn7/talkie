@@ -196,9 +196,30 @@ class WebTalkieInterface:
             messages = self._build_context_messages(user_message)
             
             # Check if user is asking to read the file aloud
-            user_wants_reading = any(keyword in user_message.lower() for keyword in 
+            user_wants_reading = any(keyword in user_message.lower() for keyword in
                                      ['read', 'read aloud', 'read this', 'read it', 'speak', 'narrate'])
-            
+
+            # Check if user is referencing a previously uploaded file without attaching it again
+            file_reference_keywords = ['the file i uploaded', 'that file', 'the document', 'that document',
+                                       'file i just uploaded', 'uploaded file', 'the pdf', 'the txt']
+            user_references_past_file = any(keyword in user_message.lower() for keyword in file_reference_keywords)
+
+            # If user references past file but didn't attach it, inject recent attachments info
+            if user_references_past_file and not attachment_ids:
+                recent_attachments = self.session_memory.get_recent_attachments(3)
+                if recent_attachments:
+                    # Add context about recent files to help LLM
+                    files_info = "\n\n[SYSTEM NOTE: User may be referring to one of these recently uploaded files:\n"
+                    for i, att in enumerate(recent_attachments, 1):
+                        files_info += f"{i}. {att['filename']} ({att['file_type']}, uploaded at {att['datetime']})\n"
+                    files_info += "Use get_attachment_content tool with the appropriate file to access its content.]"
+
+                    # Append to user's message
+                    last_message = messages[-1]
+                    if last_message["role"] == "user":
+                        last_message["content"] += files_info
+                        print(f"[SessionMemory] Injected recent attachments info for reference: {[a['filename'] for a in recent_attachments]}")
+
             # Add attachment content to the last user message if attachments are specified
             if attachment_ids and self.pending_attachments:
                 attachment_content = []
