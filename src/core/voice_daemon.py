@@ -237,19 +237,39 @@ class VoiceDaemon:
                     return
                 
                 if result.get('success'):
-                    # Estimate wait time based on text length
-                    estimated_duration = len(request.text) / 15  # ~15 chars per second
-                    wait_time = min(estimated_duration + 0.5, 30)
-                    print(f"[VoiceDaemon] Sleeping for {wait_time:.1f}s to let speech play")
+                    # Get the audio process from TTS result (NON-BLOCKING)
+                    audio_process = result.get('audio_process')
                     
-                    # Sleep in small chunks to allow interruption
-                    sleep_start = time.time()
-                    while time.time() - sleep_start < wait_time:
-                        if self.stop_event.is_set():
-                            print(f"[VoiceDaemon] Sleep interrupted by stop signal")
-                            return
-                        time.sleep(0.1)  # Check every 100ms
-                    
+                    if audio_process:
+                        # Wait for actual audio playback to finish
+                        print(f"[VoiceDaemon] Waiting for audio to finish (process PID {audio_process.pid})")
+                        while audio_process.poll() is None:
+                            if self.stop_event.is_set():
+                                print(f"[VoiceDaemon] Stop requested, terminating audio process")
+                                try:
+                                    audio_process.terminate()
+                                    try:
+                                        audio_process.wait(timeout=1)
+                                    except:
+                                        audio_process.kill()
+                                except Exception as e:
+                                    print(f"[VoiceDaemon] Error terminating audio: {e}")
+                                return
+                            time.sleep(0.05)  # Check every 50ms
+                        print(f"[VoiceDaemon] Audio process finished")
+                    else:
+                        # Fallback: old sleep method if no process available
+                        estimated_duration = len(request.text) / 15  # ~15 chars per second
+                        wait_time = min(estimated_duration + 0.5, 30)
+                        print(f"[VoiceDaemon] No audio process, sleeping for {wait_time:.1f}s")
+                        
+                        sleep_start = time.time()
+                        while time.time() - sleep_start < wait_time:
+                            if self.stop_event.is_set():
+                                print(f"[VoiceDaemon] Sleep interrupted by stop signal")
+                                return
+                            time.sleep(0.1)
+
                     print(f"[VoiceDaemon] Finished speaking: {short_text}")
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
@@ -396,13 +416,22 @@ class VoiceDaemon:
         """Stop the current speech and clear the queue."""
         was_speaking = self.is_speaking
         queue_size_before = self.speech_queue.qsize()
-        
+
         print(f"[VoiceDaemon] stop_current called. is_speaking={was_speaking}, queue_size={queue_size_before}")
-        
+
         # Signal stop to interrupt ongoing speech/sleep
         self.stop_event.set()
         print(f"[VoiceDaemon] stop_event set")
-        
+
+        # Also stop audio playback if TTS tool has stop_audio method
+        if self.tts_tool and hasattr(self.tts_tool, 'stop_audio'):
+            try:
+                stopped = self.tts_tool.stop_audio()
+                if stopped:
+                    print(f"[VoiceDaemon] Audio playback stopped via TTS tool")
+            except Exception as e:
+                print(f"[VoiceDaemon] Error stopping audio via TTS tool: {e}")
+
         # Clear queue
         cleared_count = 0
         while not self.speech_queue.empty():
@@ -411,13 +440,13 @@ class VoiceDaemon:
                 cleared_count += 1
             except queue.Empty:
                 break
-        
+
         self.queue_size = 0
         print(f"[VoiceDaemon] Queue cleared: {cleared_count} items removed")
-        
+
         # Reset stop event after a short delay to allow processing to stop
         # The daemon loop will clear it after processing the stop
-        
+
         return {
             "success": True,
             "was_speaking": was_speaking,

@@ -9,7 +9,8 @@ import asyncio
 import os
 import tempfile
 import subprocess
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+import time
 from pathlib import Path
 import re
 
@@ -104,6 +105,10 @@ class TTSTool(BaseTool):
         # Track loaded models for different languages
         self.loaded_models = {}
         self.current_language = "en"
+        
+        # Track current audio process for stopping
+        self.current_audio_process = None
+        self.is_playing = False
         
         # Default to multilingual model if config says so
         self.use_multilingual = self.tts_config.get("use_multilingual", True)
@@ -440,23 +445,24 @@ class TTSTool(BaseTool):
             except:
                 return 30  # Default fallback
     
-    def _play_audio(self, audio_path: str):
-        """Play audio file using available audio player."""
+    def _play_audio(self, audio_path: str) -> Optional[subprocess.Popen]:
+        """Play audio file using available audio player - NON-BLOCKING.
+        
+        Returns:
+            subprocess.Popen: The audio player process (can be terminated to stop)
+            None: If no audio player found
+        """
         import subprocess
-        print(f"   [AUDIO DEBUG] _play_audio() called with: {audio_path}")
+        import time
         
-        # Calculate appropriate timeout based on audio duration
-        duration = self._get_audio_duration(audio_path)
-        # Add 30 second buffer for processing time + safety margin
-        timeout = max(int(duration) + 30, 60)  # At least 60 seconds
-        print(f"   [AUDIO DEBUG] Audio duration: {duration:.1f}s, timeout: {timeout}s")
-        
+        print(f" [AUDIO DEBUG] _play_audio() NON-BLOCKING called with: {audio_path}")
+
         # Try only ONE player - the first one that works
         players = [
-            ("paplay", "PulseAudio"),      # First choice
+            ("paplay", "PulseAudio"),  # First choice
             ("ffplay -autoexit -nodisp", "FFmpeg"),  # Second choice
         ]
-        
+
         for player_cmd, player_name in players:
             player_executable = player_cmd.split()[0]
             try:
@@ -468,40 +474,82 @@ class TTSTool(BaseTool):
                 )
                 if result.returncode == 0:
                     cmd = f"{player_cmd} \"{audio_path}\""
-                    print(f"   [AUDIO DEBUG] Playing with {player_name} ({player_cmd})")
-                    subprocess.run(cmd, shell=True, check=False, 
-                                 capture_output=True, timeout=timeout)
-                    print(f"   [AUDIO DEBUG] Audio playback completed with {player_name}")
-                    return True
-            except subprocess.TimeoutExpired:
-                print(f"   [AUDIO DEBUG] {player_name} timed out after {timeout}s (audio may still be playing)")
-                # Don't treat timeout as failure - audio was likely still playing
-                return True
+                    print(f" [AUDIO DEBUG] Starting {player_name} (NON-BLOCKING)")
+                    # Use Popen for non-blocking playback
+                    process = subprocess.Popen(
+                        cmd, 
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    print(f" [AUDIO DEBUG] Started {player_name} with PID {process.pid}")
+                    self.current_audio_process = process
+                    self.is_playing = True
+                    return process
             except Exception as e:
-                print(f"   [AUDIO DEBUG] {player_name} failed: {e}")
+                print(f" [AUDIO DEBUG] {player_name} failed: {e}")
                 continue
-        
+
         # Fallback to aplay ONLY if others fail
         try:
-            print(f"   [AUDIO DEBUG] Trying aplay as fallback")
-            subprocess.run(
+            print(f" [AUDIO DEBUG] Trying aplay as fallback (NON-BLOCKING)")
+            process = subprocess.Popen(
                 f"aplay \"{audio_path}\"",
                 shell=True,
-                check=False,
-                capture_output=True,
-                timeout=timeout
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
-            print(f"   [AUDIO DEBUG] aplay completed")
-            return True
-        except subprocess.TimeoutExpired:
-            print(f"   [AUDIO DEBUG] aplay timed out after {timeout}s (audio may still be playing)")
-            # Don't treat timeout as failure
-            return True
+            print(f" [AUDIO DEBUG] Started aplay with PID {process.pid}")
+            self.current_audio_process = process
+            self.is_playing = True
+            return process
         except Exception as e:
-            print(f"   [AUDIO DEBUG] aplay also failed: {e}")
-        
-        print(f"   [AUDIO DEBUG] No audio player found!")
+            print(f" [AUDIO DEBUG] aplay also failed: {e}")
+
+        print(f" [AUDIO DEBUG] No audio player found!")
+        return None
+    
+    def stop_audio(self) -> bool:
+        """Stop the current audio playback immediately."""
+        if self.current_audio_process and self.current_audio_process.poll() is None:
+            try:
+                print(f" [AUDIO DEBUG] Stopping audio process {self.current_audio_process.pid}")
+                self.current_audio_process.terminate()
+                try:
+                    self.current_audio_process.wait(timeout=1)
+                except:
+                    self.current_audio_process.kill()
+                self.is_playing = False
+                self.current_audio_process = None
+                print(f" [AUDIO DEBUG] Audio stopped")
+                return True
+            except Exception as e:
+                print(f" [AUDIO DEBUG] Error stopping audio: {e}")
+                return False
+        self.is_playing = False
         return False
+    
+    def wait_for_audio(self, timeout: float = None) -> bool:
+        """Wait for current audio to finish playing.
+        
+        Args:
+            timeout: Max time to wait in seconds (None = wait indefinitely)
+            
+        Returns:
+            True if audio finished, False if timeout
+        """
+        if not self.current_audio_process:
+            return True
+            
+        start_time = time.time()
+        while self.current_audio_process.poll() is None:
+            if timeout and (time.time() - start_time) > timeout:
+                return False
+            time.sleep(0.05)  # Check every 50ms
+        
+        self.is_playing = False
+        self.current_audio_process = None
+        return True
     
     async def execute(self, text: str, language: str = "auto", speaker_id: str = None, 
                      speed: float = 1.0) -> Dict[str, Any]:
@@ -638,17 +686,11 @@ class TTSTool(BaseTool):
             finally:
                 # Restore stderr
                 sys.stderr = old_stderr
-            
-            # Play the audio
+
+            # Play the audio (NON-BLOCKING - returns process)
+            audio_process = None
             if os.path.exists(audio_file):
-                played = self._play_audio(audio_file)
-                
-                # Clean up temp file
-                try:
-                    os.remove(audio_file)
-                except:
-                    pass
-                
+                audio_process = self._play_audio(audio_file)
                 return {
                     "success": True,
                     "spoken": True,
@@ -658,7 +700,8 @@ class TTSTool(BaseTool):
                     "engine": "coqui-tts",
                     "model": self.current_model,
                     "multilingual": is_xtts,
-                    "audio_played": played
+                    "audio_process": audio_process,
+                    "audio_file": audio_file  # Return path for cleanup later
                 }
             else:
                 return {
