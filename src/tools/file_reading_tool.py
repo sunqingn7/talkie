@@ -132,6 +132,7 @@ class FileReadingTool(BaseTool):
     
     def _read_background(self):
         """Background thread to read all chunks."""
+        print(f"[FileReading] _read_background() started, is_reading={self.is_reading}")
         chunks = self._split_into_chunks(self.current_content, self.chunk_size)
         total_chunks = len(chunks)
         
@@ -168,9 +169,11 @@ class FileReadingTool(BaseTool):
     
     async def execute(self, file_id: str = None, filename: str = None) -> Dict[str, Any]:
         """Start reading the file in background, chunk by chunk."""
+        print(f"[FileReading] execute() called with file_id={file_id}, filename={filename}")
         
         # Check if we need to load a file
         if not self.is_reading or (file_id and file_id != self.current_file_id):
+            print(f"[FileReading] Need to load file, is_reading={self.is_reading}")
             success, message = self._load_file(file_id, filename)
             if not success:
                 return {
@@ -182,6 +185,7 @@ class FileReadingTool(BaseTool):
         
         # If already reading, just return status
         if self.is_reading:
+            print(f"[FileReading] Already reading, returning status")
             progress_percent = int((self.words_read / self.total_words) * 100) if self.total_words > 0 else 0
             chunks = self._split_into_chunks(self.current_content, self.chunk_size)
             more_content = self.current_position < len(chunks)
@@ -197,12 +201,14 @@ class FileReadingTool(BaseTool):
             }
         
         # Start background reading thread
+        print(f"[FileReading] Starting background thread...")
         self.is_reading = True
         self.current_position = 0
         self.words_read = 0
         
         reading_thread = threading.Thread(target=self._read_background, daemon=True)
         reading_thread.start()
+        print(f"[FileReading] Thread started, is_alive={reading_thread.is_alive()}")
         
         chunks = self._split_into_chunks(self.current_content, self.chunk_size)
         
