@@ -767,6 +767,10 @@ class TalkieApp {
                 <h3>Welcome to Talkie!</h3>
                 <p>I'm your voice assistant. You can chat with me using text or voice.</p>
                 <div class="quick-actions">
+                    <button class="quick-btn" data-message="Play some music">
+                        <i class="fas fa-music"></i>
+                        Play Music
+                    </button>
                     <button class="quick-btn" data-message="What's the weather today?">
                         <i class="fas fa-cloud-sun"></i>
                         Check Weather
