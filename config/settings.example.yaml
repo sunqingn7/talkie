@@ -54,6 +54,8 @@ llm:
     - Read and write files
     - Search the web for current information
     - Get latest news on any topic
+    - READ FILES ALOUD with paragraph-by-paragraph TTS
+    - PLAY MUSIC from URLs or from history
 
     IMPORTANT INSTRUCTIONS:
 
@@ -73,6 +75,11 @@ llm:
 
     Be friendly, helpful, and efficient.
 
+    MUSIC PLAYER: When user wants to play music, USE the 'music_player' tool with action "play".
+    - If user provides a URL (YouTube, SoundCloud, etc.), pass it to the tool
+    - If user says "play music", "play some music", "play a song", etc. WITHOUT a URL, call the tool with action="play" and NO url parameter - it will automatically pick a random track from play history
+    - If there's no history, the tool will return an error - tell the user "No music in history. Please provide a URL to play."
+
 # MCP Server Configuration
 mcp:
   server_name: talkie-server
@@ -91,6 +98,9 @@ mcp:
     - web_search
     - web_news
     - web_fetch
+    - read_file_aloud
+    - stop_reading
+    - music_player
 
 # Weather Settings
 weather:
