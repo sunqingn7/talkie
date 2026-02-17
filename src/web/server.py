@@ -1141,6 +1141,18 @@ CRITICAL RULES:
                 tts_tool = self.mcp_server.tools['speak']
                 current_speaker = tts_tool.get_current_speaker()
                 
+                # Stop any currently playing audio before starting new (defensive stop)
+                if hasattr(tts_tool, 'stop_audio'):
+                    try:
+                        tts_tool.stop_audio(reason="chat")
+                    except Exception as e:
+                        print(f"[speak_assistant_response] Error stopping audio: {e}")
+                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                    try:
+                        tts_tool.edge_tts_tool.stop_audio(reason="chat")
+                    except Exception as e:
+                        print(f"[speak_assistant_response] Error stopping edge_tts: {e}")
+                
                 # Strip markdown formatting (bold, italic, etc.) for clean TTS output
                 # Remove **bold** markers
                 speak_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
@@ -1213,6 +1225,9 @@ CRITICAL RULES:
                 if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
                     try:
                         tts_tool.edge_tts_tool.stop_audio(reason="chat")
+                        # Reset first message flag for new chat
+                        if hasattr(tts_tool.edge_tts_tool, 'reset_first_message_flag'):
+                            tts_tool.edge_tts_tool.reset_first_message_flag()
                     except Exception as e:
                         print(f"[stop_chat_voice] Error stopping edge_tts_tool: {e}")
             

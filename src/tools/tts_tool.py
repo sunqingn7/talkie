@@ -515,21 +515,33 @@ class TTSTool(BaseTool):
         Args:
             reason: Why we're stopping - "chat" stops chat audio, "file" skips stopping for file reading
         """
+        import os
+        import signal
+        
         print(f" [AUDIO DEBUG] TTSTool stop_audio called. reason={reason}, current_process: {self.current_audio_process}, edge_tts_tool: {self.edge_tts_tool}")
         stopped = False
         
         # Stop local process (Coqui/pyttsx3)
-        if self.current_audio_process and self.current_audio_process.poll() is None:
-            try:
-                print(f" [AUDIO DEBUG] Stopping local audio process {self.current_audio_process.pid}")
-                self.current_audio_process.terminate()
+        if self.current_audio_process:
+            if self.current_audio_process.poll() is None:
                 try:
-                    self.current_audio_process.wait(timeout=1)
-                except:
-                    self.current_audio_process.kill()
-                stopped = True
-            except Exception as e:
-                print(f" [AUDIO DEBUG] Error stopping local audio: {e}")
+                    pid = self.current_audio_process.pid
+                    print(f" [AUDIO DEBUG] Stopping local audio process {pid}")
+                    # Try to kill process group first
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    except:
+                        self.current_audio_process.terminate()
+                    try:
+                        self.current_audio_process.wait(timeout=1)
+                    except:
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        except:
+                            self.current_audio_process.kill()
+                    stopped = True
+                except Exception as e:
+                    print(f" [AUDIO DEBUG] Error stopping local audio: {e}")
             self.is_playing = False
             self.current_audio_process = None
         
@@ -776,6 +788,18 @@ class TTSTool(BaseTool):
                 "error": "Edge TTS not initialized",
                 "spoken": False
             }
+        
+        # Stop any existing chat audio before starting new chat audio
+        # This prevents overlapping - only stop if new audio is chat and previous was NOT file
+        if audio_type == "chat" and hasattr(self.edge_tts_tool, 'stop_audio'):
+            # Check if previous audio was file reading - if so, don't stop it
+            prev_audio_type = getattr(self.edge_tts_tool, 'current_audio_type', None)
+            if prev_audio_type != "file":
+                # Previous is chat or None - safe to stop before starting new chat
+                try:
+                    self.edge_tts_tool.stop_audio(reason="chat")
+                except Exception as e:
+                    print(f" [_speak_edge_tts] Error stopping previous audio: {e}")
         
         # Set audio type before executing
         if hasattr(self.edge_tts_tool, 'set_audio_type'):

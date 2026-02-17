@@ -91,11 +91,19 @@ class EdgeTTSTool(BaseTool):
         self.current_audio_process = None
         self.is_playing = False
         self.current_audio_type = None  # "chat" or "file" or None
+        self.is_first_message = True  # Track if this is the first message in a chat
     
     def set_audio_type(self, audio_type: str):
         """Set the type of audio that will be played (chat or file)."""
         self.current_audio_type = audio_type
         print(f" [AUDIO DEBUG] Edge TTS: Set audio_type to {audio_type}")
+    
+    def reset_first_message_flag(self):
+        """Reset the first message flag for a new chat.
+        Note: This is intentionally not resetting to True - we only want Hello
+        for the very first message in the entire session, not per chat."""
+        # Don't reset is_first_message - we only want "Hello" for the very first message
+        print(f" [AUDIO DEBUG] Edge TTS: Keep is_first_message=False (only say Hello on first message ever)")
     
     def get_available_voices(self) -> List[Dict]:
         """Get list of available voices."""
@@ -192,7 +200,8 @@ class EdgeTTSTool(BaseTool):
                         cmd, 
                         shell=True,
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True  # Kill child processes when parent is killed
                     )
                     print(f" [AUDIO DEBUG] Edge TTS: Started {player_name} with PID {process.pid}")
                     self.current_audio_process = process
@@ -209,7 +218,8 @@ class EdgeTTSTool(BaseTool):
                 f"aplay \"{audio_path}\"",
                 shell=True,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                start_new_session=True  # Kill child processes when parent is killed
             )
             print(f" [AUDIO DEBUG] Edge TTS: Started aplay with PID {process.pid}")
             self.current_audio_process = process
@@ -227,6 +237,9 @@ class EdgeTTSTool(BaseTool):
         Args:
             reason: Why we're stopping - "chat" stops chat audio, "file" skips stopping for file reading
         """
+        import os
+        import signal
+        
         print(f" [AUDIO DEBUG] Edge TTS stop_audio called. reason={reason}, audio_type={self.current_audio_type}, current_process: {self.current_audio_process}")
         
         # If we're asked to stop for chat but current audio is file reading, don't stop
@@ -234,26 +247,42 @@ class EdgeTTSTool(BaseTool):
             print(f" [AUDIO DEBUG] Edge TTS: Skipping stop - current audio is file reading")
             return False
         
-        if self.current_audio_process and self.current_audio_process.poll() is None:
-            try:
-                print(f" [AUDIO DEBUG] Edge TTS: Stopping audio process {self.current_audio_process.pid}")
-                self.current_audio_process.terminate()
+        if self.current_audio_process:
+            # Check if process is still running
+            poll_result = self.current_audio_process.poll()
+            if poll_result is None:
+                # Process is still running, kill the entire process group
                 try:
-                    self.current_audio_process.wait(timeout=1)
-                except:
-                    self.current_audio_process.kill()
-                self.is_playing = False
-                self.current_audio_process = None
-                self.current_audio_type = None
-                print(f" [AUDIO DEBUG] Edge TTS: Audio stopped")
-                return True
-            except Exception as e:
-                print(f" [AUDIO DEBUG] Edge TTS: Error stopping audio: {e}")
+                    pid = self.current_audio_process.pid
+                    print(f" [AUDIO DEBUG] Edge TTS: Stopping audio process group {pid}")
+                    
+                    # Kill the entire process group (including child ffplay)
+                    # Use os.killpg to kill all processes in the group
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        print(f" [AUDIO DEBUG] Edge TTS: Sent SIGTERM to process group {pid}")
+                    except Exception as e:
+                        print(f" [AUDIO DEBUG] Edge TTS: killpg failed: {e}, trying regular kill")
+                        self.current_audio_process.terminate()
+                    
+                    try:
+                        self.current_audio_process.wait(timeout=1)
+                    except:
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        except:
+                            self.current_audio_process.kill()
+                    print(f" [AUDIO DEBUG] Edge TTS: Audio stopped")
+                    return True
+                except Exception as e:
+                    print(f" [AUDIO DEBUG] Edge TTS: Error stopping audio: {e}")
+            else:
+                # Process already finished, just clear the reference
+                print(f" [AUDIO DEBUG] Edge TTS: Audio process already finished (exit code: {poll_result}), clearing reference")
         
         self.is_playing = False
+        self.current_audio_process = None
         self.current_audio_type = None
-        return False
-        self.is_playing = False
         return False
     
     def wait_for_audio(self, timeout: Optional[float] = None) -> bool:
@@ -288,6 +317,9 @@ class EdgeTTSTool(BaseTool):
         # Use provided voice or current voice
         voice_id = voice or self.current_voice
         
+        # Note: Stop logic is handled in tts_tool.py _speak_edge_tts before calling execute()
+        # This ensures we check the previous audio_type BEFORE it's overwritten by set_audio_type()
+        
         try:
             import edge_tts
             import time
@@ -300,8 +332,11 @@ class EdgeTTSTool(BaseTool):
             
             # Add short prefix to prevent Edge TTS from cutting off beginning of audio
             # This is a known Edge TTS issue
-            prefix = "Hello. "
-            text = prefix + text
+            # Only add for the first message in a chat
+            if self.is_first_message:
+                prefix = "Hello. "
+                text = prefix + text
+                self.is_first_message = False
             
             # Create communicate instance
             communicate = edge_tts.Communicate(text, voice_id, rate=rate)

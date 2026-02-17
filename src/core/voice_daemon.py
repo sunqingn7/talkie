@@ -464,21 +464,27 @@ class VoiceDaemon:
 
         # CRITICAL: Directly stop the currently playing audio process
         # This is more reliable than delegating to TTS tool which might track wrong process
-        if self.current_audio_process and self.current_audio_process.poll() is None:
-            try:
-                pid = self.current_audio_process.pid
-                print(f"[VoiceDaemon] Directly terminating audio process PID {pid}")
-                self.current_audio_process.terminate()
+        if self.current_audio_process:
+            # Check if process is still running
+            poll_result = self.current_audio_process.poll()
+            if poll_result is None:
+                # Process is still running, terminate it
                 try:
-                    self.current_audio_process.wait(timeout=0.5)
-                except:
-                    self.current_audio_process.kill()
-                    self.current_audio_process.wait(timeout=0.5)
-                print(f"[VoiceDaemon] Audio process PID {pid} terminated")
-            except Exception as e:
-                print(f"[VoiceDaemon] Error terminating audio process: {e}")
-            finally:
-                self.current_audio_process = None
+                    pid = self.current_audio_process.pid
+                    print(f"[VoiceDaemon] Directly terminating audio process PID {pid}")
+                    self.current_audio_process.terminate()
+                    try:
+                        self.current_audio_process.wait(timeout=0.5)
+                    except:
+                        self.current_audio_process.kill()
+                        self.current_audio_process.wait(timeout=0.5)
+                    print(f"[VoiceDaemon] Audio process PID {pid} terminated")
+                except Exception as e:
+                    print(f"[VoiceDaemon] Error terminating audio process: {e}")
+            else:
+                # Process already finished, just clear the reference
+                print(f"[VoiceDaemon] Audio process already finished (exit code: {poll_result}), clearing reference")
+            self.current_audio_process = None
         
         # Also try TTS tool stop as backup - pass reason="chat" to avoid stopping file reading
         if self.tts_tool and hasattr(self.tts_tool, 'stop_audio'):
