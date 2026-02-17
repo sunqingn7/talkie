@@ -23,7 +23,9 @@ def check_mpv_available() -> bool:
 
 def get_music_history_path() -> str:
     """Get the path to the music history file."""
-    config_dir = Path(__file__).parent.parent.parent / "config"
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent.parent
+    config_dir = project_root / "config"
     config_dir.mkdir(exist_ok=True)
     return str(config_dir / "music_history.json")
 
