@@ -15,6 +15,7 @@ class TalkieApp {
         this.showToolDetails = false;
         this.currentModels = null;
         this.attachments = []; // Store uploaded file info
+        this.isMusicPlaying = false;
         
         this.init();
     }
@@ -709,6 +710,17 @@ class TalkieApp {
             `;
         }
 
+        // Check if music was played or stopped
+        if (toolCalls) {
+            const toolsUsed = toolCalls.map(t => t.tool);
+            if (toolsUsed.includes('music_player')) {
+                // Check the result to see if playing or stopped
+                // For simplicity, we'll toggle based on action in the message
+                const isPlaying = content.toLowerCase().includes('playing') && !content.toLowerCase().includes('stop');
+                this.updateMusicButton(isPlaying);
+            }
+        }
+
         messageDiv.innerHTML = `
             <div class="message-avatar"><i class="fas fa-robot"></i></div>
             <div class="message-content">
@@ -724,6 +736,34 @@ class TalkieApp {
         // Skip voice if explicitly requested (e.g., when file reading is handling speech)
         if (this.voiceOutputEnabled && !skipVoice) {
             this.speakTextBackend(content);
+        }
+    }
+
+    updateMusicButton(isPlaying) {
+        this.isMusicPlaying = isPlaying;
+        
+        // Update button by ID (template button)
+        const musicBtn = document.getElementById('music-btn');
+        if (musicBtn) {
+            if (isPlaying) {
+                musicBtn.dataset.message = 'Stop the music';
+                musicBtn.innerHTML = '<i class="fas fa-stop"></i> Stop Music';
+            } else {
+                musicBtn.dataset.message = 'Play some music';
+                musicBtn.innerHTML = '<i class="fas fa-music"></i> Play Music';
+            }
+        }
+        
+        // Also update button in welcome screen (JS rendered)
+        const welcomeBtn = document.querySelector('.welcome-message #music-btn');
+        if (welcomeBtn) {
+            if (isPlaying) {
+                welcomeBtn.dataset.message = 'Stop the music';
+                welcomeBtn.innerHTML = '<i class="fas fa-stop"></i> Stop Music';
+            } else {
+                welcomeBtn.dataset.message = 'Play some music';
+                welcomeBtn.innerHTML = '<i class="fas fa-music"></i> Play Music';
+            }
         }
     }
     
@@ -767,7 +807,7 @@ class TalkieApp {
                 <h3>Welcome to Talkie!</h3>
                 <p>I'm your voice assistant. You can chat with me using text or voice.</p>
                 <div class="quick-actions">
-                    <button class="quick-btn" data-message="Play some music">
+                    <button class="quick-btn" id="music-btn" data-message="Play some music">
                         <i class="fas fa-music"></i>
                         Play Music
                     </button>
