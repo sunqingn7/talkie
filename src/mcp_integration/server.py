@@ -119,6 +119,10 @@ class TalkieMCPServer:
             from tools.datetime_tool import DateTimeTool
             self.tools["datetime"] = DateTimeTool(self.config)
         
+        if "music_player" in enabled:
+            from tools.music_player_tool import MusicPlayerTool
+            self.tools["music_player"] = MusicPlayerTool(self.config)
+        
         # Register Session Memory tools
         # These allow the LLM to query conversation history and context
         from tools.memory_tools import (
