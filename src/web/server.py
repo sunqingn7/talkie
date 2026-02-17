@@ -1164,9 +1164,14 @@ CRITICAL RULES:
                 
                 print(f"[TTS] Speaking cleaned text: {speak_text[:80]}...")
                 
+                # Set audio type to chat before executing
+                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                    tts_tool.edge_tts_tool.set_audio_type("chat")
+                
                 result = await tts_tool.execute(
                     text=speak_text,
-                    speaker_id=current_speaker
+                    speaker_id=current_speaker,
+                    audio_type="chat"
                 )
                 
                 return {
@@ -1195,15 +1200,28 @@ CRITICAL RULES:
         """Stop any ongoing chat TTS voice (not file reading).
         Called when user sends a new message to interrupt current chat response."""
         try:
-            # Stop via TTS tool
+            # Stop via TTS tool - pass reason="chat" to distinguish from file reading
             if self.mcp_server and 'speak' in self.mcp_server.tools:
                 tts_tool = self.mcp_server.tools['speak']
                 if hasattr(tts_tool, 'stop_audio'):
-                    tts_tool.stop_audio()
+                    try:
+                        tts_tool.stop_audio(reason="chat")
+                    except Exception as e:
+                        print(f"[stop_chat_voice] Error stopping TTS tool: {e}")
+                
+                # Also try to stop edge_tts_tool directly if it exists
+                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                    try:
+                        tts_tool.edge_tts_tool.stop_audio(reason="chat")
+                    except Exception as e:
+                        print(f"[stop_chat_voice] Error stopping edge_tts_tool: {e}")
             
             # Stop via voice daemon - only stop chat (HIGH priority), keep file reading (NORMAL)
             if self.mcp_server and hasattr(self.mcp_server, 'voice_daemon') and self.mcp_server.voice_daemon:
-                self.mcp_server.voice_daemon.stop_chat_voice()
+                try:
+                    self.mcp_server.voice_daemon.stop_chat_voice()
+                except Exception as e:
+                    print(f"[stop_chat_voice] Error stopping voice daemon: {e}")
             
             return {
                 "type": "chat_voice_stopped",

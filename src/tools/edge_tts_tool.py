@@ -90,6 +90,12 @@ class EdgeTTSTool(BaseTool):
         self.current_voice = self.tts_config.get('edge_voice', 'en-US-AriaNeural')
         self.current_audio_process = None
         self.is_playing = False
+        self.current_audio_type = None  # "chat" or "file" or None
+    
+    def set_audio_type(self, audio_type: str):
+        """Set the type of audio that will be played (chat or file)."""
+        self.current_audio_type = audio_type
+        print(f" [AUDIO DEBUG] Edge TTS: Set audio_type to {audio_type}")
     
     def get_available_voices(self) -> List[Dict]:
         """Get list of available voices."""
@@ -215,8 +221,19 @@ class EdgeTTSTool(BaseTool):
         print(f" [AUDIO DEBUG] Edge TTS: No audio player found!")
         return None
     
-    def stop_audio(self) -> bool:
-        """Stop the current audio playback immediately."""
+    def stop_audio(self, reason: str = "general") -> bool:
+        """Stop the current audio playback immediately.
+        
+        Args:
+            reason: Why we're stopping - "chat" stops chat audio, "file" skips stopping for file reading
+        """
+        print(f" [AUDIO DEBUG] Edge TTS stop_audio called. reason={reason}, audio_type={self.current_audio_type}, current_process: {self.current_audio_process}")
+        
+        # If we're asked to stop for chat but current audio is file reading, don't stop
+        if reason == "chat" and self.current_audio_type == "file":
+            print(f" [AUDIO DEBUG] Edge TTS: Skipping stop - current audio is file reading")
+            return False
+        
         if self.current_audio_process and self.current_audio_process.poll() is None:
             try:
                 print(f" [AUDIO DEBUG] Edge TTS: Stopping audio process {self.current_audio_process.pid}")
@@ -227,11 +244,15 @@ class EdgeTTSTool(BaseTool):
                     self.current_audio_process.kill()
                 self.is_playing = False
                 self.current_audio_process = None
+                self.current_audio_type = None
                 print(f" [AUDIO DEBUG] Edge TTS: Audio stopped")
                 return True
             except Exception as e:
                 print(f" [AUDIO DEBUG] Edge TTS: Error stopping audio: {e}")
-                return False
+        
+        self.is_playing = False
+        self.current_audio_type = None
+        return False
         self.is_playing = False
         return False
     

@@ -35,6 +35,7 @@ class SpeechRequest:
     speed: float = 1.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
+    audio_type: str = "chat"  # "chat" or "file"
     
     def __lt__(self, other):
         # For priority queue: lower priority number = higher priority
@@ -235,7 +236,8 @@ class VoiceDaemon:
                         text=request.text,
                         language=request.language,
                         speaker_id=request.speaker_id,
-                        speed=request.speed
+                        speed=request.speed,
+                        audio_type=request.audio_type
                     )
                 )
                 print(f"[VoiceDaemon] TTS result: success={result.get('success')}, error={result.get('error', 'None')}")
@@ -327,13 +329,17 @@ class VoiceDaemon:
         if not self.is_running:
             return {"success": False, "error": "Voice daemon not running"}
         
+        # Set audio_type based on priority
+        audio_type = "file" if priority == Priority.NORMAL else "chat"
+        
         request = SpeechRequest(
             text=text.strip(),
             priority=priority,
             language=language,
             speaker_id=speaker_id,
             speed=speed,
-            metadata=metadata or {}
+            metadata=metadata or {},
+            audio_type=audio_type
         )
         
         # Handle high-priority requests
@@ -474,10 +480,10 @@ class VoiceDaemon:
             finally:
                 self.current_audio_process = None
         
-        # Also try TTS tool stop as backup
+        # Also try TTS tool stop as backup - pass reason="chat" to avoid stopping file reading
         if self.tts_tool and hasattr(self.tts_tool, 'stop_audio'):
             try:
-                self.tts_tool.stop_audio()
+                self.tts_tool.stop_audio(reason="chat")
             except Exception as e:
                 print(f"[VoiceDaemon] Error in TTS tool stop_audio: {e}")
 

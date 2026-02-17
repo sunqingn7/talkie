@@ -509,11 +509,13 @@ class TTSTool(BaseTool):
         print(f" [AUDIO DEBUG] No audio player found!")
         return None
     
-    def stop_audio(self) -> bool:
+    def stop_audio(self, reason: str = "general") -> bool:
         """Stop the current audio playback immediately.
         
-        Also delegates to current engine's stop_audio() method if available.
+        Args:
+            reason: Why we're stopping - "chat" stops chat audio, "file" skips stopping for file reading
         """
+        print(f" [AUDIO DEBUG] TTSTool stop_audio called. reason={reason}, current_process: {self.current_audio_process}, edge_tts_tool: {self.edge_tts_tool}")
         stopped = False
         
         # Stop local process (Coqui/pyttsx3)
@@ -531,11 +533,11 @@ class TTSTool(BaseTool):
             self.is_playing = False
             self.current_audio_process = None
         
-        # Delegate to current engine's stop_audio()
-        if self.current_engine == "edge_tts" and self.edge_tts_tool and hasattr(self.edge_tts_tool, 'stop_audio'):
+        # Delegate to edge_tts tool if it exists
+        if self.edge_tts_tool and hasattr(self.edge_tts_tool, 'stop_audio'):
             try:
-                print(f" [AUDIO DEBUG] Delegating stop_audio to EdgeTTS tool")
-                if self.edge_tts_tool.stop_audio():
+                print(f" [AUDIO DEBUG] Stopping EdgeTTS tool audio with reason={reason}")
+                if self.edge_tts_tool.stop_audio(reason=reason):
                     stopped = True
             except Exception as e:
                 print(f" [AUDIO DEBUG] Error stopping Edge TTS audio: {e}")
@@ -568,8 +570,12 @@ class TTSTool(BaseTool):
         return True
     
     async def execute(self, text: str, language: str = "auto", speaker_id: str = None, 
-                     speed: float = 1.0) -> Dict[str, Any]:
-        """Speak the given text using the selected TTS engine."""
+                     speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
+        """Speak the given text using the selected TTS engine.
+        
+        Args:
+            audio_type: "chat" for chat responses, "file" for file reading
+        """
         
         if not text or not text.strip():
             return {
@@ -617,7 +623,7 @@ class TTSTool(BaseTool):
                 if self.edge_tts_tool is None:
                     self._init_edge_tts()
                 if self.edge_tts_tool:
-                    return await self._speak_edge_tts(text, language, speed)
+                    return await self._speak_edge_tts(text, language, speed, audio_type)
                 # Fallback to coqui if edge-tts fails
                 print("   Edge TTS not available, falling back to Coqui")
                 
@@ -762,7 +768,7 @@ class TTSTool(BaseTool):
             "note": "Using fallback TTS engine (limited language support)"
         }
     
-    async def _speak_edge_tts(self, text: str, language: str = "en", speed: float = 1.0) -> Dict[str, Any]:
+    async def _speak_edge_tts(self, text: str, language: str = "en", speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
         """Speak using Microsoft Edge TTS."""
         if self.edge_tts_tool is None:
             return {
@@ -770,6 +776,10 @@ class TTSTool(BaseTool):
                 "error": "Edge TTS not initialized",
                 "spoken": False
             }
+        
+        # Set audio type before executing
+        if hasattr(self.edge_tts_tool, 'set_audio_type'):
+            self.edge_tts_tool.set_audio_type(audio_type)
         
         # Get voice based on detected language (not user's configured voice)
         # This allows auto-switching to Chinese voice for Chinese content
