@@ -1,7 +1,9 @@
 # Environment and configuration
 .env
 *.env.local
+config.yaml
 config/*.yaml
+config/*.backup
 !config/settings.example.yaml
 
 # Models and large files
