@@ -164,7 +164,7 @@ class WebFetchTool(BaseTool):
         
         return '\n'.join(cleaned_lines)
     
-    def _extract_text_from_html(self, html: str, max_length: int = 10000) -> str:
+    def _extract_text_from_html(self, html: str, max_length: int = 50000) -> str:
         """Extract readable text from HTML."""
         try:
             from bs4 import BeautifulSoup
@@ -203,7 +203,7 @@ class WebFetchTool(BaseTool):
             traceback.print_exc()
             return f"Error parsing HTML: {str(e)}"
     
-    def _simple_extract(self, html: str, max_length: int = 10000) -> str:
+    def _simple_extract(self, html: str, max_length: int = 50000) -> str:
         """Simple extraction without BeautifulSoup."""
         # Remove scripts and styles
         html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
@@ -256,7 +256,7 @@ class WebFetchTool(BaseTool):
             return None
     
     async def execute(self, url: str, read_aloud: bool = False, 
-                     max_length: int = 10000) -> Dict[str, Any]:
+                     max_length: int = 50000) -> Dict[str, Any]:
         """Fetch and parse a webpage.
         
         Args:
@@ -408,8 +408,8 @@ class WebFetchTool(BaseTool):
         Returns:
             Dict with success status and message
         """
-        # Fetch content
-        result = await self.execute(url, read_aloud=False, max_length=15000)
+        # Fetch content - use larger limit for reading aloud
+        result = await self.execute(url, read_aloud=False, max_length=50000)
         
         if not result.get("success"):
             return result

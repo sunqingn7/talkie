@@ -637,6 +637,9 @@ class TalkieApp {
             return;
         }
         
+        // Stop any ongoing chat voice when user sends new message
+        this.stopCurrentSpeech();
+        
         // Add user message to chat (with file indicator)
         let displayMessage = message;
         if (readyAttachments.length > 0) {
@@ -1227,6 +1230,14 @@ class TalkieApp {
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
         }
+    }
+    
+    stopCurrentSpeech() {
+        // Stop browser-based TTS
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+        }
+        // Backend TTS is stopped server-side when processing new message
     }
     
     showNotification(message, type = 'info') {

@@ -417,7 +417,7 @@ class TTSReaderTool(BaseTool):
                             print(f"[TTSReader] Using pre-generated audio: {audio_file}")
                         
                         result = self.voice_daemon.speak_file_content(
-                            text=batch[:2000],
+                            text=batch[:8000],
                             paragraph_num=batch_idx + 1,
                             language=language if language != "auto" else "auto",
                             audio_file=audio_file

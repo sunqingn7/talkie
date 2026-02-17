@@ -437,10 +437,20 @@ class VoiceDaemon:
     
     def stop_current(self) -> Dict[str, Any]:
         """Stop the current speech and clear the queue."""
+        return self._stop_by_priority(Priority.HIGH)
+    
+    def stop_chat_voice(self) -> Dict[str, Any]:
+        """Stop only chat/high-priority speech, not file reading.
+        This allows file reading to continue when user sends new chat message."""
+        return self._stop_by_priority(Priority.HIGH)
+    
+    def _stop_by_priority(self, priority: Priority) -> Dict[str, Any]:
+        """Stop current speech and optionally clear queue by priority."""
         was_speaking = self.is_speaking
         queue_size_before = self.speech_queue.qsize()
 
-        print(f"[VoiceDaemon] stop_current called. is_speaking={was_speaking}, queue_size={queue_size_before}")
+        priority_name = "HIGH" if priority == Priority.HIGH else "NORMAL"
+        print(f"[VoiceDaemon] stop_{priority_name} called. is_speaking={was_speaking}, queue_size={queue_size_before}")
 
         # Signal stop to interrupt ongoing speech/sleep
         self.stop_event.set()
@@ -471,17 +481,27 @@ class VoiceDaemon:
             except Exception as e:
                 print(f"[VoiceDaemon] Error in TTS tool stop_audio: {e}")
 
-        # Clear queue
+        # Clear queue - only for the specified priority (or all if HIGH)
         cleared_count = 0
+        remaining_items = []
+        
         while not self.speech_queue.empty():
             try:
-                self.speech_queue.get_nowait()
-                cleared_count += 1
+                item = self.speech_queue.get_nowait()
+                # If stopping HIGH (chat), keep NORMAL (file reading) in queue
+                if priority == Priority.HIGH and item.priority == Priority.NORMAL:
+                    remaining_items.append(item)
+                else:
+                    cleared_count += 1
             except queue.Empty:
                 break
-
-        self.queue_size = 0
-        print(f"[VoiceDaemon] Queue cleared: {cleared_count} items removed")
+        
+        # Re-add remaining items
+        for item in remaining_items:
+            self.speech_queue.put(item)
+        
+        self.queue_size = self.speech_queue.qsize()
+        print(f"[VoiceDaemon] Queue cleared: {cleared_count} {priority_name} items removed, {len(remaining_items)} kept")
 
         # Reset stop event after a short delay to allow processing to stop
         # The daemon loop will clear it after processing the stop

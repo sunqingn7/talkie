@@ -41,7 +41,7 @@ class FileAttachmentTool(BaseTool):
         super().__init__(config)
         self.upload_dir = Path(config.get('upload_dir', tempfile.gettempdir())) / 'talkie_uploads'
         self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.max_text_size = config.get('max_attachment_text_size', 100000)  # 100KB text limit
+        self.max_text_size = config.get('max_attachment_text_size', 500000)  # 500KB text limit for TTS
         
     def _get_description(self) -> str:
         return (
