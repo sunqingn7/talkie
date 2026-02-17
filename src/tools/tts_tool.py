@@ -587,8 +587,7 @@ class TTSTool(BaseTool):
         if speaker_id is None:
             speaker_id = self.tts_config.get('speaker_id')
         
-        print(f"   [TTS DEBUG] execute() call #{TTSTool.call_count} (ID: {call_id})")
-        print(f"   [TTS DEBUG] Engine: {self.current_engine}, Text length: {len(text)}, language: {language}, speaker: {speaker_id}")
+        print(f"   [TTS] Executing TTS: {len(text)} chars, engine: {self.current_engine}, language: {language}")
         
         # Auto-detect language if not specified
         if language == "auto":

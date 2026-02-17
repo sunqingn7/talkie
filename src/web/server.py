@@ -25,7 +25,16 @@ from core.llm_client import LLMClient
 from core.model_manager import get_model_manager
 from core.session_memory import get_session_memory, SessionMemory
 from tools.file_attachment_tool import FileAttachmentTool
+
+# Import new multi-LLM components
+try:
+    from core.llm_orchestrator import LLMOrchestrator
+    MULTI_LLM_AVAILABLE = True
+except ImportError:
+    MULTI_LLM_AVAILABLE = False
+
 import yaml
+import os
 
 class ConnectionManager:
     """Manage WebSocket connections."""
@@ -55,11 +64,19 @@ class WebTalkieInterface:
         self.config = self._load_config(config_path)
         self.mcp_server: Optional[TalkieMCPServer] = None
         self.llm_client: Optional[LLMClient] = None
+        self.llm_orchestrator: Optional[LLMOrchestrator] = None
+        self.use_orchestrator = False
         self.conversation_history: List[dict] = []
         self.manager = ConnectionManager()
         self.model_manager = get_model_manager("config/models.yaml")
         self.file_attachment_tool = None
         self.pending_attachments: List[dict] = []  # Store uploaded files waiting to be attached
+        
+        # Check if multi-LLM config exists
+        self.llm_config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'llm_config.yaml')
+        if os.path.exists(self.llm_config_path) and MULTI_LLM_AVAILABLE:
+            self.use_orchestrator = True
+            print("[Web Interface] Multi-LLM config found, will use orchestrator")
         
         # Initialize session memory for persistent conversation tracking
         self.session_memory: SessionMemory = get_session_memory()
@@ -93,8 +110,42 @@ class WebTalkieInterface:
         self.mcp_server = TalkieMCPServer(config_path, session_memory=self.session_memory)
         await self.mcp_server.initialize()
         
-        # Initialize LLM client - pass config_path
-        self.llm_client = LLMClient(config_path)
+        # Initialize LLM - use orchestrator if multi-LLM config exists
+        if self.use_orchestrator and MULTI_LLM_AVAILABLE:
+            print("[Web Server] Using Multi-LLM Orchestrator")
+            llm_config = yaml.safe_load(open(self.llm_config_path))
+            
+            # Merge API keys from settings
+            api_keys = self.config.get('api_keys', {})
+            for agent_name, agent_config in llm_config.get('llm', {}).get('agents', {}).items():
+                provider = agent_config.get('provider', '')
+                if provider == 'openai' and api_keys.get('openai'):
+                    agent_config['api_key'] = api_keys['openai']
+                elif provider == 'anthropic' and api_keys.get('anthropic'):
+                    agent_config['api_key'] = api_keys['anthropic']
+                elif provider in ['google', 'gemini'] and api_keys.get('google'):
+                    agent_config['api_key'] = api_keys['google']
+            
+            # Also set API key for main/fallback
+            main_cfg = llm_config.get('llm', {}).get('main', {})
+            fallback_cfg = llm_config.get('llm', {}).get('fallback', {})
+            
+            for cfg in [main_cfg, fallback_cfg]:
+                provider = cfg.get('provider', '')
+                if provider == 'openai' and api_keys.get('openai'):
+                    cfg['api_key'] = api_keys['openai']
+                elif provider == 'anthropic' and api_keys.get('anthropic'):
+                    cfg['api_key'] = api_keys['anthropic']
+                elif provider in ['google', 'gemini'] and api_keys.get('google'):
+                    cfg['api_key'] = api_keys['google']
+            
+            self.llm_orchestrator = LLMOrchestrator(llm_config.get('llm', {}))
+            await self.llm_orchestrator.initialize()
+            print(f"[Web Server] Orchestrator ready. Available agents: {self.llm_orchestrator.available_agents}")
+        else:
+            # Use legacy single LLM client
+            print("[Web Server] Using legacy LLM client")
+            self.llm_client = LLMClient(config_path)
         
         # Initialize file attachment tool
         upload_config = self.config.get('upload', {})
@@ -242,10 +293,12 @@ class WebTalkieInterface:
                             # For analysis/summary requests, include content normally
                             file_info = f"\n\n--- Attached File: {attachment['filename']} ---\n"
                             file_info += f"Type: {attachment['file_type']}\n"
+                            # Use larger limit for content
+                            content_limit = 40000
                             if attachment.get('content'):
-                                file_info += f"Content:\n{attachment['content'][:8000]}"
-                                if len(attachment['content']) > 8000:
-                                    file_info += "\n[Content truncated for length]"
+                                file_info += f"Content:\n{attachment['content'][:content_limit]}"
+                                if len(attachment['content']) > content_limit:
+                                    file_info += f"\n[Content truncated to {content_limit} characters]"
                             attachment_content.append(file_info)
                 
                 if attachment_content:
@@ -261,20 +314,55 @@ class WebTalkieInterface:
                                     attachment = self.pending_attachments[idx]
                                     if attachment.get('_full_content'):
                                         # Insert before last message (so LLM sees it but it's not in visible chat)
+                                        # Use 50000 char limit for LLM context
+                                        content_limit = 50000
+                                        full_content = attachment['_full_content'][:content_limit]
+                                        if len(attachment['_full_content']) > content_limit:
+                                            full_content += f"\n\n[Content truncated to {content_limit} characters]"
                                         messages.insert(-1, {
                                             "role": "system",
-                                            "content": f"Full content of {attachment['filename']}:\n{attachment['_full_content'][:10000]}"
+                                            "content": f"Full content of {attachment['filename']}:\n{full_content}"
                                         })
             
             # Format tools for LLM - exclude 'speak' tool as web interface handles TTS
             tools_dict = {k: v for k, v in self.mcp_server.tools.items() if k != 'speak'}
-            tools = self.llm_client.format_tools_for_llm(tools_dict)
+            
+            # Use orchestrator if available
+            if self.use_orchestrator and self.llm_orchestrator:
+                result = await self.llm_orchestrator.process(
+                    user_input=user_message,
+                    tools=tools_dict,
+                    conversation_history=messages[:-1] if messages else None,
+                    system_prompt=self.config.get('llm', {}).get('system_prompt', '')
+                )
+                
+                if not result.get('success'):
+                    return {
+                        "type": "error",
+                        "content": result.get('content', 'LLM Error'),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                
+                content = result.get('content', '')
+                
+                # Update conversation history
+                self._add_to_history(user_message, content)
+                self.session_memory.record_message(role="assistant", content=content)
+                
+                return {
+                    "type": "assistant_message",
+                    "content": content,
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                # Legacy single LLM client
+                tools = self.llm_client.format_tools_for_llm(tools_dict)
 
-            # Debug: Log available tools
-            print(f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}")
+                # Debug: Log available tools
+                print(f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}")
 
-            # Get LLM response
-            response = self.llm_client.chat_completion(messages, tools=tools)
+                # Get LLM response
+                response = self.llm_client.chat_completion(messages, tools=tools)
             
             if "error" in response and "choices" not in response:
                 return {
@@ -711,11 +799,34 @@ CRITICAL RULES:
     
     def get_llm_status(self) -> dict:
         """Get LLM server status."""
+        # If using orchestrator, return its status
+        if self.use_orchestrator and self.llm_orchestrator:
+            import asyncio
+            try:
+                status = asyncio.get_event_loop().run_until_complete(
+                    self.llm_orchestrator.get_status()
+                )
+                return {
+                    "type": "llm_status",
+                    "using_orchestrator": True,
+                    "orchestrator_status": status,
+                    "timestamp": datetime.now().isoformat()
+                }
+            except Exception as e:
+                return {
+                    "type": "llm_status",
+                    "using_orchestrator": True,
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat()
+                }
+        
+        # Legacy: return llama.cpp server status
         running_model = self.model_manager.get_running_model()
         available_models = self.model_manager.scan_available_models()
         
         return {
             "type": "llm_status",
+            "using_orchestrator": False,
             "running": running_model is not None,
             "current_model": running_model.get("model_path") if running_model else None,
             "pid": running_model.get("pid") if running_model else None,
@@ -1022,15 +1133,36 @@ CRITICAL RULES:
     
     async def speak_assistant_response(self, text: str) -> dict:
         """Speak assistant response using TTS with current speaker."""
+        import re
+        
         try:
             if self.mcp_server and 'speak' in self.mcp_server.tools:
                 # Get current speaker from config
                 tts_tool = self.mcp_server.tools['speak']
                 current_speaker = tts_tool.get_current_speaker()
                 
-                # Truncate long text for TTS
-                max_chars = 500
-                speak_text = text[:max_chars] if len(text) > max_chars else text
+                # Strip markdown formatting (bold, italic, etc.) for clean TTS output
+                # Remove **bold** markers
+                speak_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+                # Remove *italic* markers  
+                speak_text = re.sub(r'\*([^*]+)\*', r'\1', speak_text)
+                # Remove _italic_ markers
+                speak_text = re.sub(r'_([^_]+)_', r'\1', speak_text)
+                # Remove # headers
+                speak_text = re.sub(r'^#+\s*', '', speak_text, flags=re.MULTILINE)
+                # Remove bullet points like - or * at start of lines
+                speak_text = re.sub(r'^[\-\*]\s+', '', speak_text, flags=re.MULTILINE)
+                # Clean up extra whitespace
+                speak_text = re.sub(r'\n{3,}', '\n\n', speak_text)
+                
+                # Strip any leading whitespace or non-printable characters
+                speak_text = speak_text.lstrip()
+                
+                # Truncate very long text for TTS (use large limit to allow full responses)
+                max_chars = 10000
+                speak_text = speak_text[:max_chars] if len(speak_text) > max_chars else speak_text
+                
+                print(f"[TTS] Speaking cleaned text: {speak_text[:80]}...")
                 
                 result = await tts_tool.execute(
                     text=speak_text,
@@ -1056,6 +1188,33 @@ CRITICAL RULES:
                 "type": "error",
                 "success": False,
                 "message": f"TTS failed: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    async def stop_chat_voice(self) -> dict:
+        """Stop any ongoing chat TTS voice (not file reading).
+        Called when user sends a new message to interrupt current chat response."""
+        try:
+            # Stop via TTS tool
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'stop_audio'):
+                    tts_tool.stop_audio()
+            
+            # Stop via voice daemon - only stop chat (HIGH priority), keep file reading (NORMAL)
+            if self.mcp_server and hasattr(self.mcp_server, 'voice_daemon') and self.mcp_server.voice_daemon:
+                self.mcp_server.voice_daemon.stop_chat_voice()
+            
+            return {
+                "type": "chat_voice_stopped",
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to stop voice: {str(e)}",
                 "timestamp": datetime.now().isoformat()
             }
     
@@ -1430,6 +1589,9 @@ async def websocket_endpoint(websocket: WebSocket):
             if message_type == "user_message":
                 content = data.get("content", "")
                 attachment_ids = data.get("attachment_ids", [])  # Get attachment IDs from frontend
+                
+                # Stop any ongoing chat voice before processing new message
+                await web_interface.stop_chat_voice()
                 
                 # Send thinking indicator
                 await websocket.send_json({

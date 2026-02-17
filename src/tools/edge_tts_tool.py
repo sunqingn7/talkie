@@ -162,12 +162,12 @@ class EdgeTTSTool(BaseTool):
         """
         import subprocess
         
-        print(f" [AUDIO DEBUG] Edge TTS: Starting playback (NON-BLOCKING)")
+        print(f" [Edge TTS] Starting playback (NON-BLOCKING)")
 
-        # Try players
+        # Try players - ffplay first (more reliable)
         players = [
+            ("ffplay -autoexit -nodisp -loglevel quiet", "FFmpeg"),
             ("paplay", "PulseAudio"),
-            ("ffplay -autoexit -nodisp", "FFmpeg"),
         ]
 
         for player_cmd, player_name in players:
@@ -235,7 +235,7 @@ class EdgeTTSTool(BaseTool):
         self.is_playing = False
         return False
     
-    def wait_for_audio(self, timeout: float = None) -> bool:
+    def wait_for_audio(self, timeout: Optional[float] = None) -> bool:
         """Wait for current audio to finish playing.
         
         Args:
@@ -269,6 +269,7 @@ class EdgeTTSTool(BaseTool):
         
         try:
             import edge_tts
+            import time
             
             # Create output file
             output_file = os.path.join(self.temp_dir, f"edge_tts_{id(text)}.mp3")
@@ -276,29 +277,38 @@ class EdgeTTSTool(BaseTool):
             # Calculate rate
             rate = "+0%" if speed == 1.0 else f"{int((speed - 1) * 100):+d}%"
             
+            # Add short prefix to prevent Edge TTS from cutting off beginning of audio
+            # This is a known Edge TTS issue
+            prefix = "Hello. "
+            text = prefix + text
+            
             # Create communicate instance
             communicate = edge_tts.Communicate(text, voice_id, rate=rate)
             
             # Save to file
+            start_time = time.time()
             await communicate.save(output_file)
+            gen_time = time.time() - start_time
+            print(f"   [Edge TTS] Generated in {gen_time:.2f}s")
             
             # Convert MP3 to WAV for playback compatibility
             wav_file = output_file.replace('.mp3', '.wav')
             audio_process = None
             try:
+                conv_start = time.time()
                 subprocess.run([
                     "ffmpeg", "-y", "-i", output_file,
                     "-ar", "24000", "-ac", "1", "-sample_fmt", "s16",
                     wav_file
                 ], check=False, capture_output=True, timeout=30)
+                conv_time = time.time() - conv_start
+                print(f"   [AUDIO DEBUG] Edge TTS: Converted to WAV in {conv_time:.2f}s")
 
-                # Play the WAV file (NON-BLOCKING)
-                if os.path.exists(wav_file):
-                    audio_process = self._play_audio(wav_file)
-                else:
-                    # Try playing MP3 directly
-                    audio_process = self._play_audio(output_file)
-            except:
+                # Try playing MP3 directly first (avoids conversion issues)
+                time.sleep(0.3)
+                audio_process = self._play_audio(output_file)
+            except Exception as e:
+                print(f"   [AUDIO DEBUG] Edge TTS: Error converting/playing: {e}")
                 # Try playing MP3 directly
                 audio_process = self._play_audio(output_file)
 
