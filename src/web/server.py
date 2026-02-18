@@ -5,12 +5,16 @@ FastAPI-based web interface for the voice assistant
 
 import asyncio
 import json
+import re
 import sys
 import os
 import tempfile
 from typing import Dict, List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
+
+
+URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+', re.IGNORECASE)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -250,6 +254,17 @@ class WebTalkieInterface:
             user_wants_reading = any(keyword in user_message.lower() for keyword in
                                      ['read', 'read aloud', 'read this', 'read it', 'speak', 'narrate'])
 
+            # Check for URLs in user message - if user wants to read a URL, auto-use web_fetch
+            urls_found = URL_PATTERN.findall(user_message)
+            url_to_read = None
+            if urls_found and user_wants_reading:
+                # Extract first URL and check if user wants to read it
+                url = urls_found[0]
+                # Check if URL is mentioned in a reading context
+                if 'read' in user_message.lower() or 'fetch' in user_message.lower():
+                    url_to_read = url
+                    print(f"[URL Detection] Found URL in reading context: {url}")
+
             # Check if user is referencing a previously uploaded file without attaching it again
             file_reference_keywords = ['the file i uploaded', 'that file', 'the document', 'that document',
                                        'file i just uploaded', 'uploaded file', 'the pdf', 'the txt']
@@ -319,10 +334,48 @@ class WebTalkieInterface:
                                         full_content = attachment['_full_content'][:content_limit]
                                         if len(attachment['_full_content']) > content_limit:
                                             full_content += f"\n\n[Content truncated to {content_limit} characters]"
-                                        messages.insert(-1, {
+                                            messages.insert(-1, {
                                             "role": "system",
                                             "content": f"Full content of {attachment['filename']}:\n{full_content}"
                                         })
+            
+            # Auto-handle URL reading - use file_reading_tool for pause/resume support
+            if url_to_read:
+                print(f"[URL Auto-Read] Using file_reading_tool for URL: {url_to_read}")
+                file_reading_tool = self.mcp_server.tools.get('read_file_chunk')
+                if file_reading_tool:
+                    try:
+                        result = await file_reading_tool.execute(url=url_to_read, action="read")
+                        print(f"[URL Auto-Read] Result: {result}")
+                        
+                        if result.get('success'):
+                            return {
+                                "type": "assistant_message",
+                                "content": f"Started reading the webpage. You can say 'pause' to pause, 'stop' to stop.",
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        else:
+                            error_msg = result.get('error', 'Unknown error')
+                            return {
+                                "type": "assistant_message",
+                                "content": f"I couldn't access that webpage. Error: {error_msg}",
+                                "timestamp": datetime.now().isoformat()
+                            }
+                    except Exception as e:
+                        print(f"[URL Auto-Read] Error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        return {
+                            "type": "assistant_message",
+                            "content": f"I had trouble accessing that URL: {str(e)}",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                else:
+                    return {
+                        "type": "assistant_message",
+                        "content": "File reading tool not available",
+                        "timestamp": datetime.now().isoformat()
+                    }
             
             # Format tools for LLM - exclude 'speak' tool as web interface handles TTS
             tools_dict = {k: v for k, v in self.mcp_server.tools.items() if k != 'speak'}

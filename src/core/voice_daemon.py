@@ -86,10 +86,23 @@ class VoiceDaemon:
         self.on_speech_start: Optional[Callable] = None
         self.on_speech_end: Optional[Callable] = None
         self.on_queue_empty: Optional[Callable] = None
+        
+        # File reading tool integration for auto-pause/resume
+        self.file_reading_tool = None
+        self.auto_resume_after_chat = True
+        self._file_was_reading_before_interrupt = False
     
     def set_tts_tool(self, tts_tool):
         """Set the TTS tool reference."""
         self.tts_tool = tts_tool
+    
+    def set_file_reading_tool(self, file_reading_tool):
+        """Set the file reading tool reference for auto-pause/resume."""
+        self.file_reading_tool = file_reading_tool
+    
+    def set_auto_resume(self, enabled: bool):
+        """Enable or disable auto-resume after chat."""
+        self.auto_resume_after_chat = enabled
     
     def start(self):
         """Start the voice daemon thread."""
@@ -294,6 +307,8 @@ class VoiceDaemon:
                 traceback.print_exc()
         
         finally:
+            was_high_priority = request.priority == Priority.HIGH if request else False
+            
             self.is_speaking = False
             self.current_text = ""
             self.current_audio_process = None  # Clear the audio process reference
@@ -305,6 +320,16 @@ class VoiceDaemon:
                     self.on_speech_end(request)
                 except:
                     pass
+            
+            # Auto-resume file reading after HIGH priority speech ends
+            if was_high_priority and self._file_was_reading_before_interrupt:
+                self._file_was_reading_before_interrupt = False
+                if self.file_reading_tool and self.auto_resume_after_chat:
+                    try:
+                        print(f"[VoiceDaemon] ⚡ Auto-resuming file reading after chat")
+                        self.file_reading_tool.resume_reading()
+                    except Exception as e:
+                        print(f"[VoiceDaemon] ⚡ Failed to auto-resume file reading: {e}")
     
     def enqueue(self, text: str, priority: Priority = Priority.NORMAL,
                 language: str = "auto", speaker_id: Optional[str] = None,
@@ -353,6 +378,16 @@ class VoiceDaemon:
                 # Store the interrupted file request for later resumption
                 # (Note: we don't know the exact position, but TTSReader will handle that)
                 self.interrupted_by_high_priority.set()
+                
+                # Auto-pause file reading
+                if self.file_reading_tool and hasattr(self.file_reading_tool, 'pause_reading'):
+                    self._file_was_reading_before_interrupt = True
+                    try:
+                        self.file_reading_tool.pause_reading()
+                        print(f"[VoiceDaemon] ⚡ Auto-paused file reading")
+                    except Exception as e:
+                        print(f"[VoiceDaemon] ⚡ Failed to pause file reading: {e}")
+                
                 # Signal stop to interrupt current audio
                 self.stop_event.set()
                 print(f"[VoiceDaemon] ⚡ Interrupted file reading to play high priority speech")

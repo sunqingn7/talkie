@@ -161,21 +161,63 @@ class TalkieMCPServer:
         self.tools["read_file_chunk"] = FileReadingTool(self.config)
         self.tools["read_file_chunk"].set_session_memory(self.session_memory)
         self.tools["read_file_chunk"].set_voice_daemon(self.voice_daemon)
+        
+        # Inject web_fetch_tool for URL reading support
+        if "web_fetch" in self.tools:
+            self.tools["read_file_chunk"].set_web_fetch_tool(self.tools["web_fetch"])
+        
+        # Set up auto-pause/resume integration
+        if self.voice_daemon:
+            self.voice_daemon.set_file_reading_tool(self.tools["read_file_chunk"])
+        
         print("[MCP Server] Registered read_file_chunk tool (chunk-by-chunk reading)")
         
-        # Also register stop_file_reading for the new tool
+        # Also register convenience tools for pause, resume, status
+        class PauseFileReadingTool:
+            def __init__(self, file_reading_tool):
+                self.file_tool = file_reading_tool
+                self.name = "pause_file_reading"
+                self.description = "Pause the current file reading session. Use resume_file_reading to continue."
+                self.input_schema = {"type": "object", "properties": {}}
+            
+            async def execute(self):
+                return self.file_tool.pause_reading()
+        
+        class ResumeFileReadingTool:
+            def __init__(self, file_reading_tool):
+                self.file_tool = file_reading_tool
+                self.name = "resume_file_reading"
+                self.description = "Resume a paused file reading session"
+                self.input_schema = {"type": "object", "properties": {}}
+            
+            async def execute(self):
+                return self.file_tool.resume_reading()
+        
+        class FileReadingStatusTool:
+            def __init__(self, file_reading_tool):
+                self.file_tool = file_reading_tool
+                self.name = "file_reading_status"
+                self.description = "Get the current file reading status and progress"
+                self.input_schema = {"type": "object", "properties": {}}
+            
+            async def execute(self):
+                return self.file_tool.get_status()
+        
         class StopFileReadingTool:
             def __init__(self, file_reading_tool):
                 self.file_tool = file_reading_tool
                 self.name = "stop_file_reading"
-                self.description = "Stop the current file reading session"
+                self.description = "Stop the current file reading session completely"
                 self.input_schema = {"type": "object", "properties": {}}
             
             async def execute(self):
                 return self.file_tool.stop_reading()
         
+        self.tools["pause_file_reading"] = PauseFileReadingTool(self.tools["read_file_chunk"])
+        self.tools["resume_file_reading"] = ResumeFileReadingTool(self.tools["read_file_chunk"])
+        self.tools["file_reading_status"] = FileReadingStatusTool(self.tools["read_file_chunk"])
         self.tools["stop_file_reading"] = StopFileReadingTool(self.tools["read_file_chunk"])
-        print("[MCP Server] Registered stop_file_reading tool")
+        print("[MCP Server] Registered pause/resume/status/stop file reading tools")
     
     def list_tools(self) -> List[Tool]:
         """Return list of available tools for MCP protocol."""

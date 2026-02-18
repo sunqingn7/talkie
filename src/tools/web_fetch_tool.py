@@ -224,12 +224,12 @@ class WebFetchTool(BaseTool):
         return text
     
     async def _fetch_url(self, url: str) -> Optional[str]:
-        """Fetch URL content."""
+        """Fetch URL content with fallback to cloudscraper on block."""
         try:
             import aiohttp
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Accept-Encoding': 'gzip, deflate',
@@ -246,13 +246,80 @@ class WebFetchTool(BaseTool):
                         content = await response.text()
                         print(f"[WebFetch] Fetched {len(content)} bytes")
                         return content
+                    elif response.status in (403, 429):
+                        print(f"[WebFetch] Blocked ({response.status}), trying cloudscraper...")
+                        return await self._fetch_with_cloudscraper(url)
                     else:
                         print(f"[WebFetch] HTTP {response.status}")
                         return None
         except Exception as e:
             print(f"[WebFetch] Error fetching URL: {e}")
+            return await self._fetch_with_cloudscraper(url)
+    
+    async def _fetch_with_cloudscraper(self, url: str) -> Optional[str]:
+        """Fetch using cloudscraper to bypass anti-bot protection."""
+        try:
+            import cloudscraper
+            from concurrent.futures import ThreadPoolExecutor
+            
+            print(f"[WebFetch] Using cloudscraper for: {url}")
+            
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                }
+            )
+            
+            response = scraper.get(url, timeout=30)
+            print(f"[WebFetch] cloudscraper status: {response.status_code}")
+            
+            if response.status_code == 200:
+                content = response.text
+                print(f"[WebFetch] cloudscraper fetched {len(content)} bytes")
+                return content
+            else:
+                print(f"[WebFetch] cloudscraper HTTP {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"[WebFetch] cloudscraper error: {e}")
             import traceback
             traceback.print_exc()
+            return None
+    
+    async def _fetch_with_playwright(self, url: str) -> Optional[str]:
+        """Fetch using playwright (headless browser) for JS-heavy sites."""
+        try:
+            from playwright.async_api import async_playwright
+            import asyncio
+            
+            print(f"[WebFetch] Using playwright for: {url}")
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=['--disable-blink-features=AutomationControlled']
+                )
+                page = await browser.new_page()
+                
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                """)
+                
+                try:
+                    await page.goto(url, timeout=45000, wait_until='domcontentloaded')
+                    await asyncio.sleep(3)
+                    
+                    content = await page.content()
+                    print(f"[WebFetch] playwright fetched {len(content)} bytes")
+                    return content
+                finally:
+                    await browser.close()
+        except Exception as e:
+            print(f"[WebFetch] playwright error: {e}")
             return None
     
     async def execute(self, url: str, read_aloud: bool = False, 
@@ -277,13 +344,21 @@ class WebFetchTool(BaseTool):
                 "url": url
             }
         
-        # Fetch content
+        # Fetch content with fallback chain: aiohttp -> cloudscraper -> playwright
         html = await self._fetch_url(url)
+        
+        if not html:
+            print("[WebFetch] Trying cloudscraper...")
+            html = await self._fetch_with_cloudscraper(url)
+        
+        if not html:
+            print("[WebFetch] Trying playwright...")
+            html = await self._fetch_with_playwright(url)
         
         if not html:
             return {
                 "success": False,
-                "error": "Failed to fetch webpage. The URL may be inaccessible or requires authentication.",
+                "error": "Failed to fetch webpage. The URL may be inaccessible, blocked by anti-bot protection, or requires authentication.",
                 "url": url
             }
         
