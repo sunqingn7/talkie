@@ -62,6 +62,7 @@ class ConnectionManager:
     
     async def broadcast_audio(self, audio_file: str, audio_type: str = "chat"):
         """Broadcast audio file to all connected clients."""
+        global manager
         if not os.path.exists(audio_file):
             print(f"[Web Audio] File not found: {audio_file}")
             return
@@ -79,9 +80,9 @@ class ConnectionManager:
                 "format": "mp3" if audio_file.endswith('.mp3') else "wav"
             }
             
-            for connection in self.active_connections:
+            for connection in manager.active_connections:
                 await connection.send_json(message)
-            print(f"[Web Audio] Broadcast audio to {len(self.active_connections)} clients")
+            print(f"[Web Audio] Broadcast audio to {len(manager.active_connections)} clients")
         except Exception as e:
             print(f"[Web Audio] Error broadcasting audio: {e}")
 
