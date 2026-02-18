@@ -327,7 +327,7 @@ class FileReadingTool(BaseTool):
         return True
     
     def _read_background(self):
-        """Background thread to read chunks."""
+        """Background thread to read chunks with prefetching."""
         print(f"[FileReading] _read_background() started, is_reading={self.is_reading}")
         
         if not self.current_chunks:
@@ -337,6 +337,7 @@ class FileReadingTool(BaseTool):
                 return
         
         total_chunks = len(self.current_chunks)
+        min_queue_size = 2  # Maintain at least 2 chunks in queue
         
         while self.is_reading and self.current_word_index < self.total_words:
             if not self.is_reading:
@@ -347,33 +348,41 @@ class FileReadingTool(BaseTool):
                 print(f"[FileReading] Paused, stopping background reading")
                 break
             
+            # Check if we need to load more chunks
             if self.current_chunk_index >= len(self.current_chunks):
                 if not self._load_next_chunks():
-                    print(f"[FileReading] No more chunks to load, finishing")
-                    break
+                    print(f"[FileReading] No more chunks to load, finishing remaining queue")
                 total_chunks = len(self.current_chunks)
             
-            chunk = self.current_chunks[self.current_chunk_index]
-            self.current_chunk_index += 1
+            # Get current queue size from voice daemon
+            current_queue_size = 0
+            if self.voice_daemon:
+                current_queue_size = getattr(self.voice_daemon, 'queue_size', 0)
             
-            chunk_words = len(chunk.split())
-            self.current_word_index += chunk_words
-            
-            self.position_manager.update_word_index(self.current_file_id, self.current_word_index)
-            
-            if self.voice_daemon and self.is_reading and not self.is_paused:
-                progress = int((self.current_word_index / self.total_words) * 100) if self.total_words > 0 else 0
-                print(f"[FileReading] Speaking chunk {self.current_chunk_index}/{total_chunks} ({chunk_words} words) - {progress}%")
-                result = self.voice_daemon.speak_file_content(
-                    text=chunk,
-                    paragraph_num=self.current_chunk_index,
-                    language="auto"
-                )
+            # Only add chunk if queue has room
+            if current_queue_size <= min_queue_size and self.current_chunk_index < len(self.current_chunks):
+                chunk = self.current_chunks[self.current_chunk_index]
+                self.current_chunk_index += 1
                 
-                if not result.get('success'):
-                    print(f"[FileReading] TTS failed for chunk {self.current_chunk_index}: {result.get('error')}")
-            
-            time.sleep(0.5)
+                chunk_words = len(chunk.split())
+                self.current_word_index += chunk_words
+                
+                self.position_manager.update_word_index(self.current_file_id, self.current_word_index)
+                
+                if self.voice_daemon and self.is_reading and not self.is_paused:
+                    progress = int((self.current_word_index / self.total_words) * 100) if self.total_words > 0 else 0
+                    print(f"[FileReading] Queued chunk {self.current_chunk_index}/{total_chunks} ({chunk_words} words) - {progress}%, queue={current_queue_size}")
+                    result = self.voice_daemon.speak_file_content(
+                        text=chunk,
+                        paragraph_num=self.current_chunk_index,
+                        language="auto"
+                    )
+                    
+                    if not result.get('success'):
+                        print(f"[FileReading] TTS failed for chunk {self.current_chunk_index}: {result.get('error')}")
+            else:
+                # Small sleep to avoid busy loop, but much shorter than before
+                time.sleep(0.05)
         
         if self.current_word_index >= self.total_words:
             self.position_manager.mark_completed(self.current_file_id)
