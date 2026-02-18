@@ -614,7 +614,7 @@ class FileReadingTool(BaseTool):
         self.is_paused = False
         
         if self.voice_daemon:
-            self.voice_daemon.stop_current()
+            self.voice_daemon.stop_file_reading()
         
         if self.current_file_id:
             self.position_manager.delete_position(self.current_file_id)

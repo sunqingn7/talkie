@@ -480,6 +480,10 @@ class VoiceDaemon:
         """Stop the current speech and clear the queue."""
         return self._stop_by_priority(Priority.HIGH)
     
+    def stop_file_reading(self) -> Dict[str, Any]:
+        """Stop file reading (normal priority) and clear the queue."""
+        return self._stop_by_priority(Priority.NORMAL)
+    
     def stop_chat_voice(self) -> Dict[str, Any]:
         """Stop only chat/high-priority speech, not file reading.
         This allows file reading to continue when user sends new chat message."""
