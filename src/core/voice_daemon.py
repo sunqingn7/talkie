@@ -86,6 +86,7 @@ class VoiceDaemon:
         self.on_speech_start: Optional[Callable] = None
         self.on_speech_end: Optional[Callable] = None
         self.on_queue_empty: Optional[Callable] = None
+        self.on_audio_ready: Optional[Callable] = None  # Called with (audio_file, audio_type) after TTS generates audio
         
         # File reading tool integration for auto-pause/resume
         self.file_reading_tool = None
@@ -299,6 +300,16 @@ class VoiceDaemon:
                             time.sleep(0.1)
 
                     print(f"[VoiceDaemon] Finished speaking: {short_text}")
+                    
+                    # Trigger audio ready callback (for web broadcast)
+                    if self.on_audio_ready:
+                        audio_file = result.get('audio_file') or result.get('output_file')
+                        if audio_file:
+                            try:
+                                audio_type = "file" if request.priority == Priority.NORMAL else "chat"
+                                self.on_audio_ready(audio_file, audio_type)
+                            except Exception as e:
+                                print(f"[VoiceDaemon] Error in on_audio_ready callback: {e}")
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
             except Exception as e:

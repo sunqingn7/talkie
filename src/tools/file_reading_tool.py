@@ -83,6 +83,59 @@ class FileReadingTool(BaseTool):
     def set_voice_daemon(self, voice_daemon):
         """Set the voice daemon reference."""
         self.voice_daemon = voice_daemon
+        
+        # Set up audio ready callback for web broadcast
+        if voice_daemon:
+            voice_daemon.on_audio_ready = self._on_audio_ready
+    
+    def _on_audio_ready(self, audio_file: str, audio_type: str):
+        """Callback when audio is ready - broadcast to web if needed."""
+        # Import here to avoid circular import
+        from src.web.server import manager
+        
+        # Check voice_output setting
+        voice_output = self.config.get('tts', {}).get('voice_output', 'local') if hasattr(self, 'config') else 'local'
+        
+        if voice_output == 'web':
+            # Schedule async broadcast (voice_daemon runs in separate thread)
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type))
+            except RuntimeError:
+                # No event loop, skip broadcast
+                pass
+    
+    async def _broadcast_audio(self, audio_file: str, audio_type: str):
+        """Broadcast audio to web clients."""
+        from src.web.server import manager
+        
+        if not audio_file:
+            return
+        
+        try:
+            import os
+            import base64
+            
+            if not os.path.exists(audio_file):
+                return
+            
+            with open(audio_file, 'rb') as f:
+                audio_data = base64.b64encode(f.read()).decode('utf-8')
+            
+            message = {
+                "type": "audio",
+                "audio_data": audio_data,
+                "audio_type": audio_type,
+                "format": "mp3" if audio_file.endswith('.mp3') else "wav"
+            }
+            
+            for connection in manager.active_connections:
+                await connection.send_json(message)
+            print(f"[FileReading] Broadcast audio to {len(manager.active_connections)} clients")
+        except Exception as e:
+            print(f"[FileReading] Error broadcasting audio: {e}")
     
     def set_web_fetch_tool(self, web_fetch_tool):
         """Set the web fetch tool for URL reading."""
