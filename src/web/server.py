@@ -59,6 +59,31 @@ class ConnectionManager:
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
             await connection.send_json(message)
+    
+    async def broadcast_audio(self, audio_file: str, audio_type: str = "chat"):
+        """Broadcast audio file to all connected clients."""
+        if not os.path.exists(audio_file):
+            print(f"[Web Audio] File not found: {audio_file}")
+            return
+        
+        # Read audio file as base64
+        import base64
+        try:
+            with open(audio_file, 'rb') as f:
+                audio_data = base64.b64encode(f.read()).decode('utf-8')
+            
+            message = {
+                "type": "audio",
+                "audio_data": audio_data,
+                "audio_type": audio_type,
+                "format": "mp3" if audio_file.endswith('.mp3') else "wav"
+            }
+            
+            for connection in self.active_connections:
+                await connection.send_json(message)
+            print(f"[Web Audio] Broadcast audio to {len(self.active_connections)} clients")
+        except Exception as e:
+            print(f"[Web Audio] Error broadcasting audio: {e}")
 
 
 class WebTalkieInterface:
@@ -990,6 +1015,44 @@ CRITICAL RULES:
                 "timestamp": datetime.now().isoformat()
             }
     
+    def set_voice_output_mode(self, mode: str) -> dict:
+        """Set voice output mode (local or web)."""
+        try:
+            if mode not in ["local", "web"]:
+                return {
+                    "type": "voice_output_mode",
+                    "success": False,
+                    "message": f"Invalid mode: {mode}. Use 'local' or 'web'",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Update config
+            self.config['tts']['voice_output'] = mode
+            
+            # Save config
+            self.save_config()
+            
+            # Also update the edge_tts_tool if it exists
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                    tts_tool.edge_tts_tool.voice_output = mode
+            
+            return {
+                "type": "voice_output_mode",
+                "success": True,
+                "message": f"Voice output mode set to {mode}",
+                "mode": mode,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to set voice output mode: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
     async def switch_edge_voice(self, voice_id: str) -> dict:
         """Switch Edge TTS voice."""
         try:
@@ -1239,11 +1302,19 @@ CRITICAL RULES:
                     audio_type="chat"
                 )
                 
+                # Check if voice_output is "web" - broadcast audio to clients
+                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
+                if voice_output == "web" and result.get('success'):
+                    audio_file = result.get('audio_file') or result.get('output_file')
+                    if audio_file:
+                        await self.manager.broadcast_audio(audio_file, audio_type="chat")
+                
                 return {
                     "type": "tts_spoken",
                     "success": result.get('success', False),
                     "speaker": current_speaker,
                     "characters": len(speak_text),
+                    "voice_output": voice_output,
                     "timestamp": datetime.now().isoformat()
                 }
             else:
@@ -1733,6 +1804,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 speaker_id = data.get("speaker_id") if data else None
                 demo_text = data.get("text", f"Hello, this is the selected voice")
                 result = await web_interface.demo_tts_speaker(speaker_id, demo_text)
+                await websocket.send_json(result)
+            
+            elif message_type == "set_voice_output":
+                mode = data.get("mode", "local") if data else "local"
+                result = web_interface.set_voice_output_mode(mode)
                 await websocket.send_json(result)
             
             elif message_type == "speak_assistant_response":

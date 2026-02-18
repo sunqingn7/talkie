@@ -88,6 +88,7 @@ class EdgeTTSTool(BaseTool):
         self.tts_config = config.get("tts", {})
         self.temp_dir = tempfile.mkdtemp(prefix="talkie_edge_tts_")
         self.current_voice = self.tts_config.get('edge_voice', 'en-US-AriaNeural')
+        self.voice_output = self.tts_config.get('voice_output', 'local')  # local or web
         self.current_audio_process = None
         self.is_playing = False
         self.current_audio_type = None  # "chat" or "file" or None
@@ -350,23 +351,28 @@ class EdgeTTSTool(BaseTool):
             # Convert MP3 to WAV for playback compatibility
             wav_file = output_file.replace('.mp3', '.wav')
             audio_process = None
-            try:
-                conv_start = time.time()
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", output_file,
-                    "-ar", "24000", "-ac", "1", "-sample_fmt", "s16",
-                    wav_file
-                ], check=False, capture_output=True, timeout=30)
-                conv_time = time.time() - conv_start
-                print(f"   [AUDIO DEBUG] Edge TTS: Converted to WAV in {conv_time:.2f}s")
+            
+            # Skip local playback if voice_output is "web"
+            if self.voice_output != "web":
+                try:
+                    conv_start = time.time()
+                    subprocess.run([
+                        "ffmpeg", "-y", "-i", output_file,
+                        "-ar", "24000", "-ac", "1", "-sample_fmt", "s16",
+                        wav_file
+                    ], check=False, capture_output=True, timeout=30)
+                    conv_time = time.time() - conv_start
+                    print(f"   [AUDIO DEBUG] Edge TTS: Converted to WAV in {conv_time:.2f}s")
 
-                # Try playing MP3 directly first (avoids conversion issues)
-                time.sleep(0.3)
-                audio_process = self._play_audio(output_file)
-            except Exception as e:
-                print(f"   [AUDIO DEBUG] Edge TTS: Error converting/playing: {e}")
-                # Try playing MP3 directly
-                audio_process = self._play_audio(output_file)
+                    # Try playing MP3 directly first (avoids conversion issues)
+                    time.sleep(0.3)
+                    audio_process = self._play_audio(output_file)
+                except Exception as e:
+                    print(f"   [AUDIO DEBUG] Edge TTS: Error converting/playing: {e}")
+                    # Try playing MP3 directly
+                    audio_process = self._play_audio(output_file)
+            else:
+                print(f"   [AUDIO DEBUG] Edge TTS: voice_output=web, skipping local playback")
 
             return {
                 "success": True,
@@ -374,7 +380,8 @@ class EdgeTTSTool(BaseTool):
                 "voice": voice_id,
                 "output_file": output_file,
                 "audio_process": audio_process,
-                "audio_file": wav_file if os.path.exists(wav_file) else output_file
+                "audio_file": wav_file if os.path.exists(wav_file) else output_file,
+                "voice_output": self.voice_output  # Tell caller what mode we're in
             }
             
         except ImportError:

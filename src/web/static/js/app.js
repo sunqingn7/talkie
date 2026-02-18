@@ -71,6 +71,10 @@ class TalkieApp {
         document.getElementById('voice-output-toggle').addEventListener('change', (e) => {
             this.voiceOutputEnabled = e.target.checked;
         });
+        document.getElementById('voice-output-mode').addEventListener('change', (e) => {
+            const mode = e.target.value;
+            this.sendSystemMessage('set_voice_output', { mode: mode });
+        });
         document.getElementById('autoscroll-toggle').addEventListener('change', (e) => {
             this.autoscrollEnabled = e.target.checked;
         });
@@ -581,7 +585,29 @@ class TalkieApp {
                 if (!data.success) {
                     console.error('TTS failed:', data.message);
                 } else {
-                    console.log(`TTS spoken: ${data.characters} characters using speaker: ${data.speaker}`);
+                    console.log(`TTS spoken: ${data.characters} characters using speaker: ${data.speaker}, output: ${data.voice_output}`);
+                }
+                break;
+            
+            case 'audio':
+                // Receive audio from server and play in browser
+                if (data.audio_data) {
+                    console.log('[Web Audio] Received audio, type:', data.audio_type);
+                    try {
+                        const audioBytes = atob(data.audio_data);
+                        const audioBuffer = new Uint8Array(audioBytes.length);
+                        for (let i = 0; i < audioBytes.length; i++) {
+                            audioBuffer[i] = audioBytes.charCodeAt(i);
+                        }
+                        
+                        const blob = new Blob([audioBuffer], { type: data.format === 'mp3' ? 'audio/mpeg' : 'audio/wav' });
+                        const audioUrl = URL.createObjectURL(blob);
+                        const audio = new Audio(audioUrl);
+                        audio.play();
+                        console.log('[Web Audio] Playing audio in browser');
+                    } catch (e) {
+                        console.error('[Web Audio] Error playing audio:', e);
+                    }
                 }
                 break;
                 
