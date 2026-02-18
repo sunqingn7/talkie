@@ -87,14 +87,19 @@ class FileReadingTool(BaseTool):
         # Set up audio ready callback for web broadcast
         if voice_daemon:
             voice_daemon.on_audio_ready = self._on_audio_ready
+            print(f"[FileReading] Set voice_daemon callback, voice_output={self.config.get('tts', {}).get('voice_output', 'local') if self.config else 'unknown'}")
     
     def _on_audio_ready(self, audio_file: str, audio_type: str):
         """Callback when audio is ready - broadcast to web if needed."""
         # Import here to avoid circular import
         from src.web.server import manager
         
-        # Check voice_output setting
-        voice_output = self.config.get('tts', {}).get('voice_output', 'local') if hasattr(self, 'config') else 'local'
+        # Check voice_output setting - use get_config to ensure we have latest
+        voice_output = 'local'
+        if hasattr(self, 'config') and self.config:
+            voice_output = self.config.get('tts', {}).get('voice_output', 'local')
+        
+        print(f"[FileReading] _on_audio_ready: voice_output={voice_output}, audio_type={audio_type}")
         
         if voice_output == 'web':
             # Schedule async broadcast (voice_daemon runs in separate thread)
@@ -103,9 +108,10 @@ class FileReadingTool(BaseTool):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type))
-            except RuntimeError:
-                # No event loop, skip broadcast
-                pass
+                else:
+                    print(f"[FileReading] Loop not running, skipping broadcast")
+            except RuntimeError as e:
+                print(f"[FileReading] No event loop: {e}, skipping broadcast")
     
     async def _broadcast_audio(self, audio_file: str, audio_type: str):
         """Broadcast audio to web clients."""

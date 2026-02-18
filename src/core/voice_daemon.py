@@ -307,6 +307,7 @@ class VoiceDaemon:
                         if audio_file:
                             try:
                                 audio_type = "file" if request.priority == Priority.NORMAL else "chat"
+                                print(f"[VoiceDaemon] Calling on_audio_ready callback: audio_file={audio_file}, audio_type={audio_type}")
                                 self.on_audio_ready(audio_file, audio_type)
                             except Exception as e:
                                 print(f"[VoiceDaemon] Error in on_audio_ready callback: {e}")
