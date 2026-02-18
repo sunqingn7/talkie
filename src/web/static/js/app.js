@@ -908,6 +908,12 @@ class TalkieApp {
                 engineDisplay.textContent = engineName;
             }
             document.getElementById('current-llm-model').textContent = data.config.llm_model || 'Unknown';
+            
+            // Update voice output mode dropdown
+            const voiceOutputSelect = document.getElementById('voice-output-mode');
+            if (voiceOutputSelect && data.config.voice_output) {
+                voiceOutputSelect.value = data.config.voice_output;
+            }
         }
         
         // Update control panel status

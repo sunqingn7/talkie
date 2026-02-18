@@ -117,7 +117,28 @@ class WebTalkieInterface:
         if not os.path.exists(config_path):
             config_path = os.path.join(os.path.dirname(__file__), '..', '..', config_path)
         with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f)
+        
+        # Auto-detect voice_output based on web host
+        web_host = config.get('app', {}).get('web_host', '0.0.0.0')
+        local_hosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
+        
+        # Check if host is a local address
+        is_local = any(web_host.startswith(h) or web_host == h for h in local_hosts)
+        
+        # Also check for common local IP patterns
+        if not is_local and web_host:
+            if web_host.startswith('192.168.') or web_host.startswith('10.') or web_host.startswith('172.'):
+                is_local = True
+        
+        # Set default voice_output if not explicitly set
+        if 'tts' not in config:
+            config['tts'] = {}
+        if 'voice_output' not in config['tts']:
+            config['tts']['voice_output'] = 'local' if is_local else 'web'
+            print(f"[Config] Auto-detected voice_output={config['tts']['voice_output']} (host={web_host}, is_local={is_local})")
+        
+        return config
     
     def save_config(self):
         """Save current config to settings.yaml."""
@@ -800,6 +821,7 @@ CRITICAL RULES:
             "config": {
                 "tts_engine": self.config.get('tts', {}).get('engine', 'unknown'),
                 "tts_model": self.config.get('tts', {}).get('coqui_model', 'unknown'),
+                "voice_output": self.config.get('tts', {}).get('voice_output', 'local'),
                 "llm_model": llm_model,
                 "stt_model": self.config.get('stt', {}).get('model', 'unknown'),
             },
