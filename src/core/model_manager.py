@@ -205,7 +205,9 @@ class LLMModelManager:
             "no_mmap": False,
             "cont_batching": True,
             "flash_attn": True,
-            "embeddings": True
+            "embeddings": True,
+            "main_gpu": 1,
+            "tensor_split": "4,1"
         }
     
     def get_running_model(self) -> Optional[Dict]:
@@ -374,6 +376,12 @@ class LLMModelManager:
         
         if params.get("numa"):
             cmd.extend(["--numa", params["numa"]])
+        
+        if params.get("main_gpu") is not None:
+            cmd.extend(["--main-gpu", str(params["main_gpu"])])
+        
+        if params.get("tensor_split"):
+            cmd.extend(["-ts", params["tensor_split"]])
         
         # Enable Jinja templating for chat formats
         cmd.append("--jinja")

@@ -200,6 +200,7 @@
                                         -moz-appearance: none;
                                     ">
                                         <option value="edge_tts">Edge TTS (Microsoft) - Online, High Quality</option>
+                                        <option value="qwen_tts">Qwen3 TTS (Local) - CustomVoice/VoiceDesign</option>
                                         <option value="coqui">Coqui TTS (Local) - XTTS Multilingual</option>
                                         <option value="pyttsx3">pyttsx3 (Fallback) - Basic</option>
                                     </select>
@@ -236,6 +237,93 @@
                                 <p class="card-description" style="font-size: 12px; margin-bottom: 12px;">Select local TTS model (Coqui only)</p>
                                 <div class="model-list" id="tts-model-list">
                                     <!-- Models will be populated here -->
+                                </div>
+                            </div>
+                            
+                            <!-- Qwen TTS Settings -->
+                            <div id="qwen-tts-section" class="qwen-section" style="margin-bottom: 24px; padding-top: 20px; border-top: 1px solid var(--border-color); display: none;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+                                        <i class="fas fa-robot" style="margin-right: 8px;"></i>Qwen3 TTS Settings
+                                    </h4>
+                                </div>
+                                <p class="card-description" style="font-size: 12px; margin-bottom: 12px;">Configure Qwen3 TTS model and voice settings</p>
+                                
+                                <!-- Model Type Selector -->
+                                <div style="margin-bottom: 16px;">
+                                    <label style="font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">Model Type</label>
+                                    <div class="selector-wrapper" style="position: relative;">
+                                        <select id="qwen-model-type-select" 
+                                            onchange="if(window.talkieApp){window.talkieApp.setQwenTTSModelType(this.value)}"
+                                            style="width: 100%; padding: 8px 32px 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; cursor: pointer; appearance: none;">
+                                            <option value="custom_voice_0.6b">0.6B CustomVoice (Faster)</option>
+                                            <option value="custom_voice_1.7b">1.7B CustomVoice (Higher Quality)</option>
+                                            <option value="voice_design_1.7b">1.7B VoiceDesign (Natural Language)</option>
+                                        </select>
+                                        <i class="fas fa-chevron-down" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none;"></i>
+                                    </div>
+                                </div>
+                                
+                                <!-- Speaker Selector (for CustomVoice models) -->
+                                <div id="qwen-speaker-row" style="margin-bottom: 16px;">
+                                    <label style="font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">Speaker (CustomVoice)</label>
+                                    <div class="selector-wrapper" style="position: relative;">
+                                        <select id="qwen-speaker-select" 
+                                            onchange="if(window.talkieApp){window.talkieApp.setQwenTTSSpeaker(this.value)}"
+                                            style="width: 100%; padding: 8px 32px 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; cursor: pointer; appearance: none;">
+                                            <option value="Vivian">Vivian (Chinese, Female)</option>
+                                            <option value="Serena">Serena (Chinese, Female)</option>
+                                            <option value="Uncle_Fu">Uncle Fu (Chinese, Male)</option>
+                                            <option value="Dylan">Dylan (Chinese Beijing, Male)</option>
+                                            <option value="Eric">Eric (Chinese Sichuan, Male)</option>
+                                            <option value="Ryan">Ryan (English, Male)</option>
+                                            <option value="Aiden">Aiden (English, Male)</option>
+                                            <option value="Ono_Anna">Ono Anna (Japanese, Female)</option>
+                                            <option value="Sohee">Sohee (Korean, Female)</option>
+                                        </select>
+                                        <i class="fas fa-chevron-down" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none;"></i>
+                                    </div>
+                                </div>
+                                
+                                <!-- Language Selector -->
+                                <div id="qwen-language-row" style="margin-bottom: 16px;">
+                                    <label style="font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">Language</label>
+                                    <div class="selector-wrapper" style="position: relative;">
+                                        <select id="qwen-language-select" 
+                                            onchange="if(window.talkieApp){window.talkieApp.setQwenTTSLanguage(this.value)}"
+                                            style="width: 100%; padding: 8px 32px 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; cursor: pointer; appearance: none;">
+                                            <option value="Auto">Auto Detect</option>
+                                            <option value="Chinese">Chinese</option>
+                                            <option value="English">English</option>
+                                            <option value="Japanese">Japanese</option>
+                                            <option value="Korean">Korean</option>
+                                            <option value="German">German</option>
+                                            <option value="French">French</option>
+                                            <option value="Russian">Russian</option>
+                                            <option value="Portuguese">Portuguese</option>
+                                            <option value="Spanish">Spanish</option>
+                                            <option value="Italian">Italian</option>
+                                        </select>
+                                        <i class="fas fa-chevron-down" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none;"></i>
+                                    </div>
+                                </div>
+                                
+                                <!-- Instruction Input -->
+                                <div style="margin-bottom: 16px;">
+                                    <label style="font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 6px;">
+                                        <span id="qwen-instruct-label">Voice Instruction</span>
+                                        <span id="qwen-instruct-hint" style="font-weight: normal; color: var(--text-secondary);"> - Control tone, emotion, speed</span>
+                                    </label>
+                                    <textarea id="qwen-instruct-input" 
+                                        placeholder="e.g., 用特别愤怒的语气说 / Speak in a happy, excited tone"
+                                        onchange="if(window.talkieApp){window.talkieApp.setQwenTTSInstruct(this.value)}"
+                                        style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; min-height: 60px; resize: vertical; font-family: inherit;"></textarea>
+                                </div>
+                                
+                                <!-- Qwen TTS status/info -->
+                                <div id="qwen-tts-status" style="padding: 10px; background: var(--bg-dark); border-radius: 6px; border: 1px solid var(--border-color); font-size: 12px; color: var(--text-muted);">
+                                    <i class="fas fa-info-circle" style="margin-right: 6px;"></i>
+                                    <span id="qwen-tts-status-text">Qwen3 TTS runs locally. First use requires model download (~1-2GB).</span>
                                 </div>
                             </div>
                             

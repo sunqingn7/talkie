@@ -283,6 +283,16 @@ class VoiceDaemon:
                                         audio_process.kill()
                                 except Exception as e:
                                     print(f"[VoiceDaemon] Error terminating audio: {e}")
+                                
+                                # Still call callback for interrupted audio (for web broadcast)
+                                audio_file = result.get('audio_file') or result.get('output_file')
+                                if audio_file and self.on_audio_ready:
+                                    try:
+                                        audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
+                                        print(f"[VoiceDaemon] Calling callback for interrupted audio: {audio_type}")
+                                        self.on_audio_ready(audio_file, audio_type)
+                                    except Exception as e:
+                                        print(f"[VoiceDaemon] Error in callback for interrupted audio: {e}")
                                 return
                             time.sleep(0.05)  # Check every 50ms
                         print(f"[VoiceDaemon] Audio process finished")
@@ -290,27 +300,49 @@ class VoiceDaemon:
                         # Fallback: old sleep method if no process available
                         estimated_duration = len(request.text) / 15  # ~15 chars per second
                         wait_time = min(estimated_duration + 0.5, 30)
-                        print(f"[VoiceDaemon] No audio process, sleeping for {wait_time:.1f}s")
+                        print(f"[VoiceDaemon] No audio process, sleeping for {wait_time:.1f}s, priority={request.priority if request else 'None'}")
                         
                         sleep_start = time.time()
                         while time.time() - sleep_start < wait_time:
                             if self.stop_event.is_set():
-                                print(f"[VoiceDaemon] Sleep interrupted by stop signal")
+                                print(f"[VoiceDaemon] Sleep interrupted by stop signal, priority={request.priority if request else 'None'}")
+                                
+                                # Still call callback for interrupted audio (for web broadcast)
+                                audio_file = result.get('audio_file') or result.get('output_file')
+                                if audio_file and self.on_audio_ready:
+                                    try:
+                                        audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
+                                        print(f"[VoiceDaemon] Calling callback for interrupted audio: {audio_type}")
+                                        self.on_audio_ready(audio_file, audio_type)
+                                    except Exception as e:
+                                        print(f"[VoiceDaemon] Error in callback for interrupted audio: {e}")
                                 return
                             time.sleep(0.1)
 
                     print(f"[VoiceDaemon] Finished speaking: {short_text}")
                     
                     # Trigger audio ready callback (for web broadcast)
+                    print(f"[VoiceDaemon] on_audio_ready is: {self.on_audio_ready}")
+                    print(f"[VoiceDaemon] result keys: {result.keys() if result else 'None'}")
+                    print(f"[VoiceDaemon] result audio_file: {result.get('audio_file')}, output_file: {result.get('output_file')}")
+                    print(f"[VoiceDaemon] Priority: {request.priority if request else 'None'}")
+                    print(f"[VoiceDaemon] About to call callback!")
+                    
                     if self.on_audio_ready:
                         audio_file = result.get('audio_file') or result.get('output_file')
+                        print(f"[VoiceDaemon] audio_file for callback: {audio_file}")
                         if audio_file:
                             try:
-                                audio_type = "file" if request.priority == Priority.NORMAL else "chat"
+                                audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
                                 print(f"[VoiceDaemon] Calling on_audio_ready callback: audio_file={audio_file}, audio_type={audio_type}")
                                 self.on_audio_ready(audio_file, audio_type)
+                                print(f"[VoiceDaemon] Callback returned successfully")
                             except Exception as e:
                                 print(f"[VoiceDaemon] Error in on_audio_ready callback: {e}")
+                                import traceback
+                                traceback.print_exc()
+                    else:
+                        print(f"[VoiceDaemon] NO CALLBACK SET - this is the bug!")
                 else:
                     print(f"[VoiceDaemon] TTS failed: {result.get('error', 'Unknown error')}")
             except Exception as e:

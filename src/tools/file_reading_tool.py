@@ -6,6 +6,7 @@ natural stopping by simply not calling the tool again.
 Supports pause/resume and large file streaming.
 """
 
+import asyncio
 import sys
 import threading
 import time
@@ -23,6 +24,21 @@ from utils.file_stream_reader import (
     get_file_info,
     split_into_chunks
 )
+
+# Global event loop reference for thread-safe async operations
+_main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_main_event_loop(loop: asyncio.AbstractEventLoop):
+    """Set the main event loop for thread-safe async operations."""
+    global _main_event_loop
+    _main_event_loop = loop
+
+
+def get_main_event_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """Get the main event loop."""
+    global _main_event_loop
+    return _main_event_loop
 
 
 class FileReadingTool(BaseTool):
@@ -88,13 +104,21 @@ class FileReadingTool(BaseTool):
         if voice_daemon:
             voice_daemon.on_audio_ready = self._on_audio_ready
             print(f"[FileReading] Set voice_daemon callback, voice_output={self.config.get('tts', {}).get('voice_output', 'local') if self.config else 'unknown'}")
+            print(f"[FileReading] Callback is: {voice_daemon.on_audio_ready}")
     
     def _on_audio_ready(self, audio_file: str, audio_type: str):
-        """Callback when audio is ready - broadcast to web if needed."""
-        # Import here to avoid circular import
-        from src.web.server import manager
+        """Callback when audio is ready - broadcast to web if voice_output is 'web'."""
+        import asyncio
+        from src.web.server import web_interface
         
-        # Check voice_output setting - use get_config to ensure we have latest
+        manager = None
+        try:
+            manager = web_interface.manager
+        except Exception as e:
+            print(f"[FileReading] Could not get web_interface.manager: {e}")
+        
+        print(f"[FileReading] >>> _on_audio_ready ENTERED: audio_file={audio_file}, audio_type={audio_type}, manager_id={id(manager) if manager else 'None'}, connections={len(manager.active_connections) if manager else 0}")
+        
         voice_output = 'local'
         if hasattr(self, 'config') and self.config:
             voice_output = self.config.get('tts', {}).get('voice_output', 'local')
@@ -102,20 +126,31 @@ class FileReadingTool(BaseTool):
         print(f"[FileReading] _on_audio_ready: voice_output={voice_output}, audio_type={audio_type}")
         
         if voice_output == 'web':
-            # Schedule async broadcast (voice_daemon runs in separate thread)
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type))
-                else:
-                    print(f"[FileReading] Loop not running, skipping broadcast")
-            except RuntimeError as e:
-                print(f"[FileReading] No event loop: {e}, skipping broadcast")
+            loop = get_main_event_loop()
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_audio(audio_file, audio_type),
+                    loop
+                )
+            else:
+                print(f"[FileReading] Main loop not available, trying fallback...")
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type))
+                    else:
+                        print(f"[FileReading] Loop not running, skipping broadcast")
+                except RuntimeError as e:
+                    print(f"[FileReading] No event loop: {e}, skipping broadcast")
     
     async def _broadcast_audio(self, audio_file: str, audio_type: str):
         """Broadcast audio to web clients."""
-        from src.web.server import manager
+        # Always get fresh reference from web_interface
+        try:
+            from src.web.server import web_interface
+            manager = web_interface.manager if hasattr(web_interface, 'manager') else None
+        except:
+            manager = None
         
         if not audio_file:
             return
@@ -124,7 +159,14 @@ class FileReadingTool(BaseTool):
             import os
             import base64
             
+            if not manager:
+                print(f"[FileReading] manager not ready, skipping broadcast")
+                return
+            
+            print(f"[FileReading] _broadcast_audio: connections={len(manager.active_connections)}, manager_id={id(manager)}")
+            
             if not os.path.exists(audio_file):
+                print(f"[FileReading] Audio file not found: {audio_file}")
                 return
             
             with open(audio_file, 'rb') as f:
@@ -137,11 +179,15 @@ class FileReadingTool(BaseTool):
                 "format": "mp3" if audio_file.endswith('.mp3') else "wav"
             }
             
-            for connection in manager.active_connections:
+            connections = manager.active_connections
+            print(f"[FileReading] About to broadcast to {len(connections)} connections")
+            for connection in connections:
                 await connection.send_json(message)
-            print(f"[FileReading] Broadcast audio to {len(manager.active_connections)} clients")
+            print(f"[FileReading] Broadcast complete to {len(connections)} clients")
         except Exception as e:
+            import traceback
             print(f"[FileReading] Error broadcasting audio: {e}")
+            traceback.print_exc()
     
     def set_web_fetch_tool(self, web_fetch_tool):
         """Set the web fetch tool for URL reading."""

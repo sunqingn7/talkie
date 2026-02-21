@@ -49,9 +49,11 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        print(f"[ConnectionManager] Connected! Total: {len(self.active_connections)}, id={id(self)}")
     
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
+        print(f"[ConnectionManager] Disconnected! Total: {len(self.active_connections)}, id={id(self)}")
     
     async def send_message(self, message: dict, websocket: WebSocket):
         await websocket.send_json(message)
@@ -62,7 +64,6 @@ class ConnectionManager:
     
     async def broadcast_audio(self, audio_file: str, audio_type: str = "chat"):
         """Broadcast audio file to all connected clients."""
-        global manager
         if not os.path.exists(audio_file):
             print(f"[Web Audio] File not found: {audio_file}")
             return
@@ -80,9 +81,10 @@ class ConnectionManager:
                 "format": "mp3" if audio_file.endswith('.mp3') else "wav"
             }
             
-            for connection in manager.active_connections:
+            print(f"[Web Audio] About to broadcast to {len(web_interface.manager.active_connections)} connections, manager_id={id(web_interface.manager)}")
+            for connection in web_interface.manager.active_connections:
                 await connection.send_json(message)
-            print(f"[Web Audio] Broadcast audio to {len(manager.active_connections)} clients")
+            print(f"[Web Audio] Broadcast complete to {len(web_interface.manager.active_connections)} clients")
         except Exception as e:
             print(f"[Web Audio] Error broadcasting audio: {e}")
 
@@ -834,6 +836,7 @@ CRITICAL RULES:
         # TTS Engines
         tts_engines = [
             {"id": "edge_tts", "name": "Edge TTS (Microsoft)", "type": "online", "description": "High quality, fast, requires internet"},
+            {"id": "qwen_tts", "name": "Qwen3 TTS (Local)", "type": "local", "description": "CustomVoice and VoiceDesign modes"},
             {"id": "coqui", "name": "Coqui TTS (Local)", "type": "local", "description": "Offline, customizable voices, large models"},
             {"id": "pyttsx3", "name": "pyttsx3 (Fallback)", "type": "local", "description": "Basic offline TTS"},
         ]
@@ -1061,6 +1064,13 @@ CRITICAL RULES:
                 if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
                     tts_tool.edge_tts_tool.voice_output = mode
             
+            # Also update file_reading_tool config
+            if self.mcp_server and 'read_file_chunk' in self.mcp_server.tools:
+                file_reading_tool = self.mcp_server.tools['read_file_chunk']
+                if hasattr(file_reading_tool, 'config') and file_reading_tool.config:
+                    file_reading_tool.config.setdefault('tts', {})['voice_output'] = mode
+                    print(f"[WebServer] Updated file_reading_tool config: voice_output={mode}")
+            
             return {
                 "type": "voice_output_mode",
                 "success": True,
@@ -1134,19 +1144,19 @@ CRITICAL RULES:
             speakers = tts_tool.get_available_speakers()
             current_speaker = tts_tool.get_current_speaker()
             
-            # Get Edge TTS info if that's the current engine
             if current_engine == "edge_tts":
                 if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
                     edge_voices = tts_tool.edge_tts_tool.get_available_voices()
                     current_edge_voice = tts_tool.edge_tts_tool.get_current_voice()
                 else:
-                    # Edge TTS not initialized yet
                     try:
                         from tools.edge_tts_tool import EdgeTTSTool
                         edge_voices = EdgeTTSTool.AVAILABLE_VOICES
                         current_edge_voice = self.config.get('tts', {}).get('edge_voice', 'en-US-AriaNeural')
                     except Exception as e:
                         print(f"⚠️  Failed to load Edge TTS voices: {e}")
+        
+        qwen_tts_info = self.get_qwen_tts_info()
         
         return {
             "type": "tts_speakers",
@@ -1155,6 +1165,7 @@ CRITICAL RULES:
             "current_tts_engine": current_engine,
             "edge_voices": edge_voices,
             "current_edge_voice": current_edge_voice,
+            "qwen_tts": qwen_tts_info,
             "count": len(speakers),
             "timestamp": datetime.now().isoformat()
         }
@@ -1199,6 +1210,155 @@ CRITICAL RULES:
                 "timestamp": datetime.now().isoformat()
             }
     
+    def get_qwen_tts_info(self) -> dict:
+        """Get Qwen TTS configuration info."""
+        qwen_config = self.config.get('tts', {}).get('qwen_tts', {})
+        
+        try:
+            from tools.qwen_tts_tool import QwenTTSTool
+            speakers = QwenTTSTool.CUSTOM_VOICE_SPEAKERS
+            languages = QwenTTSTool.SUPPORTED_LANGUAGES
+            model_types = [
+                {"id": "custom_voice_0.6b", "name": "Qwen3-TTS 0.6B CustomVoice", "description": "Faster, smaller model with predefined speakers"},
+                {"id": "custom_voice_1.7b", "name": "Qwen3-TTS 1.7B CustomVoice", "description": "Higher quality model with predefined speakers"},
+                {"id": "voice_design_1.7b", "name": "Qwen3-TTS 1.7B VoiceDesign", "description": "Design voices using natural language descriptions"},
+            ]
+        except Exception as e:
+            print(f"[WebServer] Error loading Qwen TTS info: {e}")
+            speakers = []
+            languages = []
+            model_types = []
+        
+        return {
+            "type": "qwen_tts_info",
+            "enabled": qwen_config.get('enabled', True),
+            "model_type": qwen_config.get('model_type', 'custom_voice_0.6b'),
+            "speaker": qwen_config.get('speaker', 'Vivian'),
+            "language": qwen_config.get('language', 'Auto'),
+            "instruct": qwen_config.get('instruct', ''),
+            "device": qwen_config.get('device', 'cuda:0'),
+            "speakers": speakers,
+            "languages": languages,
+            "model_types": model_types,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def set_qwen_tts_model_type(self, model_type: str) -> dict:
+        """Set Qwen TTS model type."""
+        try:
+            if 'qwen_tts' not in self.config['tts']:
+                self.config['tts']['qwen_tts'] = {}
+            
+            self.config['tts']['qwen_tts']['model_type'] = model_type
+            self.save_config()
+            
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+                    tts_tool.qwen_tts_tool.set_model_type(model_type)
+            
+            return {
+                "type": "qwen_tts_model_type_set",
+                "success": True,
+                "message": f"Qwen TTS model type set to {model_type}",
+                "model_type": model_type,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to set Qwen TTS model type: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def set_qwen_tts_speaker(self, speaker: str) -> dict:
+        """Set Qwen TTS speaker for CustomVoice models."""
+        try:
+            if 'qwen_tts' not in self.config['tts']:
+                self.config['tts']['qwen_tts'] = {}
+            
+            self.config['tts']['qwen_tts']['speaker'] = speaker
+            self.save_config()
+            
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+                    tts_tool.qwen_tts_tool.set_speaker(speaker)
+            
+            return {
+                "type": "qwen_tts_speaker_set",
+                "success": True,
+                "message": f"Qwen TTS speaker set to {speaker}",
+                "speaker": speaker,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to set Qwen TTS speaker: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def set_qwen_tts_language(self, language: str) -> dict:
+        """Set Qwen TTS language."""
+        try:
+            if 'qwen_tts' not in self.config['tts']:
+                self.config['tts']['qwen_tts'] = {}
+            
+            self.config['tts']['qwen_tts']['language'] = language
+            self.save_config()
+            
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+                    tts_tool.qwen_tts_tool.set_language(language)
+            
+            return {
+                "type": "qwen_tts_language_set",
+                "success": True,
+                "message": f"Qwen TTS language set to {language}",
+                "language": language,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to set Qwen TTS language: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    def set_qwen_tts_instruct(self, instruct: str) -> dict:
+        """Set Qwen TTS instruction for voice control."""
+        try:
+            if 'qwen_tts' not in self.config['tts']:
+                self.config['tts']['qwen_tts'] = {}
+            
+            self.config['tts']['qwen_tts']['instruct'] = instruct
+            self.save_config()
+            
+            if self.mcp_server and 'speak' in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools['speak']
+                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+                    tts_tool.qwen_tts_tool.set_instruct(instruct)
+            
+            return {
+                "type": "qwen_tts_instruct_set",
+                "success": True,
+                "message": "Qwen TTS instruction updated",
+                "instruct": instruct[:100] + "..." if len(instruct) > 100 else instruct,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to set Qwen TTS instruction: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+    
     async def test_tts_speaker(self, speaker_id: str = None) -> dict:
         """Test TTS with current or specified speaker."""
         try:
@@ -1209,8 +1369,16 @@ CRITICAL RULES:
                 # Use specified speaker or current
                 result = await self.mcp_server.tools['speak'].execute(
                     text=test_text,
-                    speaker_id=speaker_id
+                    speaker_id=speaker_id,
+                    audio_type="test"
                 )
+                
+                # Check if voice_output is "web" - broadcast audio to clients
+                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
+                if voice_output == "web" and result.get('success'):
+                    audio_file = result.get('audio_file') or result.get('output_file')
+                    if audio_file:
+                        await self.manager.broadcast_audio(audio_file, audio_type="test")
                 
                 return {
                     "type": "tts_test_result",
@@ -1244,8 +1412,16 @@ CRITICAL RULES:
                 # Use specified speaker
                 result = await self.mcp_server.tools['speak'].execute(
                     text=text,
-                    speaker_id=speaker_id
+                    speaker_id=speaker_id,
+                    audio_type="demo"
                 )
+                
+                # Check if voice_output is "web" - broadcast audio to clients
+                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
+                if voice_output == "web" and result.get('success'):
+                    audio_file = result.get('audio_file') or result.get('output_file')
+                    if audio_file:
+                        await self.manager.broadcast_audio(audio_file, audio_type="demo")
                 
                 return {
                     "type": "tts_demo_result",
@@ -1558,12 +1734,15 @@ CRITICAL RULES:
 
 # Create global interface instance
 web_interface = WebTalkieInterface()
-manager = ConnectionManager()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown."""
+    # Set the main event loop for thread-safe async operations in file reading
+    from tools.file_reading_tool import set_main_event_loop
+    set_main_event_loop(asyncio.get_running_loop())
+    
     # Startup
     await web_interface.initialize()
     yield
@@ -1753,7 +1932,7 @@ async def restart_llm_server():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time chat."""
-    await manager.connect(websocket)
+    await web_interface.manager.connect(websocket)
     
     # Send initial status
     await websocket.send_json(web_interface.get_system_status())
@@ -1834,6 +2013,30 @@ async def websocket_endpoint(websocket: WebSocket):
                 result = web_interface.set_voice_output_mode(mode)
                 await websocket.send_json(result)
             
+            elif message_type == "get_qwen_tts_info":
+                result = web_interface.get_qwen_tts_info()
+                await websocket.send_json(result)
+            
+            elif message_type == "set_qwen_tts_model_type":
+                model_type = data.get("model_type", "custom_voice_0.6b")
+                result = web_interface.set_qwen_tts_model_type(model_type)
+                await websocket.send_json(result)
+            
+            elif message_type == "set_qwen_tts_speaker":
+                speaker = data.get("speaker", "Vivian")
+                result = web_interface.set_qwen_tts_speaker(speaker)
+                await websocket.send_json(result)
+            
+            elif message_type == "set_qwen_tts_language":
+                language = data.get("language", "Auto")
+                result = web_interface.set_qwen_tts_language(language)
+                await websocket.send_json(result)
+            
+            elif message_type == "set_qwen_tts_instruct":
+                instruct = data.get("instruct", "")
+                result = web_interface.set_qwen_tts_instruct(instruct)
+                await websocket.send_json(result)
+            
             elif message_type == "speak_assistant_response":
                 text = data.get("text", "")
                 if text:
@@ -1905,10 +2108,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        web_interface.manager.disconnect(websocket)
     except Exception as e:
         print(f"WebSocket error: {e}")
-        manager.disconnect(websocket)
+        web_interface.manager.disconnect(websocket)
 
 
 # Session Memory API Endpoints

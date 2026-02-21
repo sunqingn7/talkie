@@ -98,6 +98,7 @@ class TTSTool(BaseTool):
         self.coqui_tts = None
         self.pyttsx3_engine = None
         self.edge_tts_tool = None
+        self.qwen_tts_tool = None
         self.current_model = None
         self.device = None
         self.temp_dir = tempfile.mkdtemp(prefix="talkie_tts_")
@@ -120,6 +121,8 @@ class TTSTool(BaseTool):
     async def initialize(self):
         """Async initialization for web interface compatibility."""
         # Ensure engine is initialized
+        if self.current_engine == "qwen_tts" and self.qwen_tts_tool is None:
+            self._init_qwen_tts()
         if self.current_engine == "edge_tts" and self.edge_tts_tool is None:
             self._init_edge_tts()
         elif self.current_engine == "coqui" and self.coqui_tts is None:
@@ -134,6 +137,8 @@ class TTSTool(BaseTool):
         
         if engine == "edge_tts":
             self._init_edge_tts()
+        elif engine == "qwen_tts":
+            self._init_qwen_tts()
         elif engine == "coqui":
             self._init_coqui_tts()
         elif engine == "pyttsx3":
@@ -157,9 +162,24 @@ class TTSTool(BaseTool):
             self._init_coqui_tts()
             return False
     
+    def _init_qwen_tts(self):
+        """Initialize Qwen TTS engine."""
+        try:
+            from tools.qwen_tts_tool import QwenTTSTool
+            self.qwen_tts_tool = QwenTTSTool(self.config)
+            self.current_engine = "qwen_tts"
+            print("   ✅ Qwen TTS ready")
+            return True
+        except Exception as e:
+            print(f"   ⚠️  Qwen TTS initialization failed: {e}")
+            self.qwen_tts_tool = None
+            # Fall back to edge_tts
+            self._init_edge_tts()
+            return False
+    
     def get_available_engines(self) -> list:
         """Get list of available TTS engines."""
-        return ["edge_tts", "coqui", "pyttsx3"]
+        return ["edge_tts", "qwen_tts", "coqui", "pyttsx3"]
     
     def get_current_engine(self) -> str:
         """Get current TTS engine name."""
@@ -182,6 +202,8 @@ class TTSTool(BaseTool):
         # Check if engine initialized successfully
         engine_ready = False
         if engine == "edge_tts" and self.edge_tts_tool is not None:
+            engine_ready = True
+        elif engine == "qwen_tts" and self.qwen_tts_tool is not None:
             engine_ready = True
         elif engine == "coqui" and self.coqui_tts is not None:
             engine_ready = True
@@ -631,6 +653,14 @@ class TTSTool(BaseTool):
         
         try:
             # Route to appropriate engine based on current_engine setting
+            if self.current_engine == "qwen_tts":
+                if self.qwen_tts_tool is None:
+                    self._init_qwen_tts()
+                if self.qwen_tts_tool:
+                    return await self._speak_qwen(text, language, speed, audio_type)
+                # Fallback to edge_tts if qwen fails
+                print("   Qwen TTS not available, falling back to Edge TTS")
+            
             if self.current_engine == "edge_tts":
                 if self.edge_tts_tool is None:
                     self._init_edge_tts()
@@ -780,6 +810,48 @@ class TTSTool(BaseTool):
             "note": "Using fallback TTS engine (limited language support)"
         }
     
+    async def _speak_qwen(self, text: str, language: str = "auto", speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
+        """Speak using Qwen TTS."""
+        if self.qwen_tts_tool is None:
+            return {
+                "success": False,
+                "error": "Qwen TTS not initialized",
+                "spoken": False
+            }
+        
+        if audio_type == "chat" and hasattr(self.qwen_tts_tool, 'stop_audio'):
+            prev_audio_type = getattr(self.qwen_tts_tool, 'current_audio_type', None)
+            if prev_audio_type != "file":
+                try:
+                    self.qwen_tts_tool.stop_audio(reason="chat")
+                except Exception as e:
+                    print(f" [_speak_qwen] Error stopping previous audio: {e}")
+        
+        if hasattr(self.qwen_tts_tool, 'set_audio_type'):
+            self.qwen_tts_tool.set_audio_type(audio_type)
+        
+        qwen_language = "Auto"
+        if language and language != "auto":
+            lang_map = {
+                "en": "English", "zh": "Chinese", "zh-cn": "Chinese",
+                "ja": "Japanese", "ko": "Korean", "de": "German",
+                "fr": "French", "ru": "Russian", "pt": "Portuguese",
+                "es": "Spanish", "it": "Italian"
+            }
+            qwen_language = lang_map.get(language.lower(), "Auto")
+        
+        result = await self.qwen_tts_tool.execute(
+            text=text,
+            language=qwen_language,
+            audio_type=audio_type
+        )
+        
+        if result.get("success"):
+            result["engine"] = "qwen-tts"
+            result["language"] = language
+        
+        return result
+    
     async def _speak_edge_tts(self, text: str, language: str = "en", speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
         """Speak using Microsoft Edge TTS."""
         if self.edge_tts_tool is None:
@@ -890,6 +962,21 @@ class TTSTool(BaseTool):
                     })
             return speakers
         
+        # For Qwen TTS, return CustomVoice speakers
+        if self.current_engine == "qwen_tts":
+            if self.qwen_tts_tool is None:
+                self._init_qwen_tts()
+            if self.qwen_tts_tool:
+                for speaker_info in self.qwen_tts_tool.CUSTOM_VOICE_SPEAKERS:
+                    speakers.append({
+                        "id": speaker_info["id"],
+                        "name": speaker_info["name"],
+                        "native_language": speaker_info.get("native_language", "Unknown"),
+                        "description": speaker_info.get("description", ""),
+                        "type": "qwen"
+                    })
+            return speakers
+        
         # For Coqui TTS, only initialize if it's the current engine
         if self.current_engine == "coqui":
             if self.coqui_tts is None:
@@ -944,6 +1031,19 @@ class TTSTool(BaseTool):
                     return True
                 return False
             
+            # Handle Qwen TTS speaker selection
+            if self.current_engine == "qwen_tts":
+                if self.qwen_tts_tool is None:
+                    self._init_qwen_tts()
+                if self.qwen_tts_tool:
+                    self.qwen_tts_tool.set_speaker(speaker_id)
+                    if 'qwen_tts' not in self.tts_config:
+                        self.tts_config['qwen_tts'] = {}
+                    self.tts_config['qwen_tts']['speaker'] = speaker_id
+                    print(f"   🎭 Qwen TTS speaker set to: {speaker_id}")
+                    return True
+                return False
+            
             # Handle Coqui TTS speaker selection
             if self.current_engine == "coqui":
                 if self.coqui_tts and hasattr(self.coqui_tts, 'speakers'):
@@ -973,6 +1073,12 @@ class TTSTool(BaseTool):
             if self.edge_tts_tool:
                 return self.edge_tts_tool.get_current_voice()
             return self.tts_config.get('edge_voice', 'en-US-AriaNeural')
+        
+        # For Qwen TTS, return the current speaker
+        if self.current_engine == "qwen_tts":
+            if self.qwen_tts_tool:
+                return self.qwen_tts_tool.current_speaker
+            return self.tts_config.get('qwen_tts', {}).get('speaker', 'Vivian')
         
         # For Coqui TTS
         speaker = self.tts_config.get('speaker_id')

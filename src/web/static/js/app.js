@@ -348,9 +348,9 @@ class TalkieApp {
     }
     
     updateEngineUI(engine) {
-        // Update engine description
         const descriptions = {
             'edge_tts': '<i class="fas fa-info-circle" style="margin-right: 6px;"></i>Uses Microsoft Edge online TTS service. Requires internet connection.',
+            'qwen_tts': '<i class="fas fa-info-circle" style="margin-right: 6px;"></i>Local Qwen3 TTS model. Supports CustomVoice and VoiceDesign modes.',
             'coqui': '<i class="fas fa-info-circle" style="margin-right: 6px;"></i>Uses local XTTS models. Works offline but requires ~1.5GB download.',
             'pyttsx3': '<i class="fas fa-info-circle" style="margin-right: 6px;"></i>Basic offline TTS. Limited quality and language support.'
         };
@@ -360,9 +360,9 @@ class TalkieApp {
             descEl.innerHTML = descriptions[engine] || '';
         }
         
-        // Update current engine badge
         const engineNames = {
             'edge_tts': 'Edge TTS',
+            'qwen_tts': 'Qwen3 TTS',
             'coqui': 'Coqui',
             'pyttsx3': 'pyttsx3'
         };
@@ -371,19 +371,20 @@ class TalkieApp {
             badge.textContent = engineNames[engine] || engine;
         }
         
-        // Show/hide sections based on engine
         const xttsSection = document.getElementById('xtts-model-section');
+        const qwenSection = document.getElementById('qwen-tts-section');
         const speakerSection = document.querySelector('.speaker-section');
         
         if (xttsSection) {
             xttsSection.style.display = engine === 'coqui' ? 'block' : 'none';
         }
-        // Speaker section is always visible - it shows voices for Edge TTS or personas for Coqui
+        if (qwenSection) {
+            qwenSection.style.display = engine === 'qwen_tts' ? 'block' : 'none';
+        }
         if (speakerSection) {
-            speakerSection.style.display = 'block';
+            speakerSection.style.display = (engine === 'edge_tts' || engine === 'coqui' || engine === 'pyttsx3') ? 'block' : 'none';
         }
         
-        // Update speaker section label based on engine
         const speakerLabel = document.querySelector('.speaker-section h4');
         if (speakerLabel) {
             if (engine === 'edge_tts') {
@@ -393,7 +394,6 @@ class TalkieApp {
             }
         }
         
-        // Update speaker description
         const speakerDesc = document.querySelector('.speaker-section .card-description');
         if (speakerDesc) {
             if (engine === 'edge_tts') {
@@ -402,6 +402,44 @@ class TalkieApp {
                 speakerDesc.textContent = 'Select a voice persona for the assistant';
             }
         }
+        
+        if (engine === 'qwen_tts') {
+            this.sendSystemMessage('get_qwen_tts_info', {});
+        }
+    }
+    
+    setQwenTTSModelType(modelType) {
+        console.log('Setting Qwen TTS model type:', modelType);
+        this.sendSystemMessage('set_qwen_tts_model_type', { model_type: modelType });
+        
+        const speakerRow = document.getElementById('qwen-speaker-row');
+        const instructLabel = document.getElementById('qwen-instruct-label');
+        const instructHint = document.getElementById('qwen-instruct-hint');
+        
+        if (modelType.includes('voice_design')) {
+            if (speakerRow) speakerRow.style.display = 'none';
+            if (instructLabel) instructLabel.textContent = 'Voice Design Description';
+            if (instructHint) instructHint.textContent = ' - Describe the voice style';
+        } else {
+            if (speakerRow) speakerRow.style.display = 'block';
+            if (instructLabel) instructLabel.textContent = 'Voice Instruction';
+            if (instructHint) instructHint.textContent = ' - Control tone, emotion, speed (optional)';
+        }
+    }
+    
+    setQwenTTSSpeaker(speaker) {
+        console.log('Setting Qwen TTS speaker:', speaker);
+        this.sendSystemMessage('set_qwen_tts_speaker', { speaker: speaker });
+    }
+    
+    setQwenTTSLanguage(language) {
+        console.log('Setting Qwen TTS language:', language);
+        this.sendSystemMessage('set_qwen_tts_language', { language: language });
+    }
+    
+    setQwenTTSInstruct(instruct) {
+        console.log('Setting Qwen TTS instruct:', instruct.substring(0, 50));
+        this.sendSystemMessage('set_qwen_tts_instruct', { instruct: instruct });
     }
     
     switchTTSEngine(engineId) {
@@ -527,6 +565,7 @@ class TalkieApp {
                     // Update sidebar engine display
                     const engineNames = {
                         'edge_tts': 'Edge TTS',
+                        'qwen_tts': 'Qwen3 TTS',
                         'coqui': 'Coqui TTS',
                         'pyttsx3': 'pyttsx3'
                     };
@@ -562,6 +601,23 @@ class TalkieApp {
                             currentSpeakerName.textContent = voiceOption.text.split(' (')[0];
                         }
                     }
+                }
+                break;
+
+            case 'qwen_tts_info':
+                if (data.success !== false) {
+                    this.updateQwenTTSUI(data);
+                }
+                break;
+            
+            case 'qwen_tts_model_type_set':
+            case 'qwen_tts_speaker_set':
+            case 'qwen_tts_language_set':
+            case 'qwen_tts_instruct_set':
+                if (data.success) {
+                    console.log(data.message);
+                } else {
+                    this.showNotification(data.message || 'Failed to update Qwen TTS setting', 'error');
                 }
                 break;
 
@@ -899,6 +955,7 @@ class TalkieApp {
             // Update TTS Engine display
             const engineNames = {
                 'edge_tts': 'Edge TTS',
+                'qwen_tts': 'Qwen3 TTS',
                 'coqui': 'Coqui TTS',
                 'pyttsx3': 'pyttsx3'
             };
@@ -1186,6 +1243,46 @@ class TalkieApp {
             if (currentSpeakerInfo) {
                 currentSpeakerInfo.style.display = 'none';
             }
+        }
+    }
+    
+    updateQwenTTSUI(data) {
+        const modelTypeSelect = document.getElementById('qwen-model-type-select');
+        const speakerSelect = document.getElementById('qwen-speaker-select');
+        const languageSelect = document.getElementById('qwen-language-select');
+        const instructInput = document.getElementById('qwen-instruct-input');
+        const speakerRow = document.getElementById('qwen-speaker-row');
+        const instructLabel = document.getElementById('qwen-instruct-label');
+        const instructHint = document.getElementById('qwen-instruct-hint');
+        
+        if (modelTypeSelect && data.model_type) {
+            modelTypeSelect.value = data.model_type;
+            
+            const isVoiceDesign = data.model_type.includes('voice_design');
+            if (speakerRow) speakerRow.style.display = isVoiceDesign ? 'none' : 'block';
+            if (instructLabel) instructLabel.textContent = isVoiceDesign ? 'Voice Design Description' : 'Voice Instruction';
+            if (instructHint) instructHint.textContent = isVoiceDesign ? ' - Describe the voice style' : ' - Control tone, emotion, speed (optional)';
+        }
+        
+        if (speakerSelect && data.speaker) {
+            speakerSelect.value = data.speaker;
+        }
+        
+        if (languageSelect && data.language) {
+            languageSelect.value = data.language;
+        }
+        
+        if (instructInput && data.instruct !== undefined) {
+            instructInput.value = data.instruct;
+        }
+        
+        if (data.speakers && speakerSelect) {
+            const currentSpeaker = data.speaker || 'Vivian';
+            speakerSelect.innerHTML = data.speakers.map(speaker => `
+                <option value="${speaker.id}" ${speaker.id === currentSpeaker ? 'selected' : ''}>
+                    ${speaker.name} (${speaker.native_language}, ${speaker.description.split(',')[0]})
+                </option>
+            `).join('');
         }
     }
     
