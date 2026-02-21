@@ -1127,18 +1127,22 @@ class TalkieApp {
                          data-model-type="llm"
                          style="${!canSelect ? 'opacity: 0.5; cursor: not-allowed;' : ''}">
                         <div class="model-info-text">
-                            <div class="model-name">${model.name} ${isActive ? '<span class="model-badge active" style="font-size: 10px; margin-left: 8px;">Active</span>' : ''} ${!canSelect ? '<span class="model-badge" style="font-size: 10px; margin-left: 8px;">Not Downloaded</span>' : ''}</div>
+                            <div class="model-name">${model.name}</div>
                             <div class="model-meta">${model.parameters || 'Unknown params'} • ${model.size} • ${model.quantization || 'Unknown'}</div>
                             <div class="model-desc" style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${model.description || ''}</div>
                         </div>
-                        <div class="model-params-input" style="margin-top: 10px; width: 100%;">
-                            <textarea class="model-param-field"
-                                   data-model-id="${model.id}"
-                                   placeholder='Custom parameters (JSON), e.g., {"ctx_size": 65536, "temperature": 0.8}'
-                                   onclick="event.stopPropagation();"
-                                   onchange="window.talkieApp && window.talkieApp.saveModelParamFromInput('${model.id}', this.value)"
-                                   style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace; min-height: 50px; resize: vertical; line-height: 1.4;">${this.escapeHtml(paramsValue)}</textarea>
-                        </div>
+                        ${isActive ? 
+                            '<span class="model-badge active">Active</span>' : 
+                            (!canSelect ? '<span class="model-badge">Not Downloaded</span>' : '')
+                        }
+                        <input type="text" 
+                               class="model-param-field"
+                               data-model-id="${model.id}"
+                               placeholder='params: {"ctx_size": 65536}'
+                               value="${this.escapeHtml(paramsValue)}"
+                               onclick="event.stopPropagation();"
+                               onchange="window.talkieApp && window.talkieApp.saveModelParamFromInput('${model.id}', this.value)"
+                               style="width: 180px; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace; margin-left: 12px;">
                     </div>
                 `;
             }).join('');
