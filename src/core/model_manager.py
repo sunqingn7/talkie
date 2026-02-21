@@ -10,16 +10,18 @@ import time
 import yaml
 import glob
 import psutil
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Tuple
 from pathlib import Path
 
 
 class LLMModelManager:
     """Manages llama-server processes and model switching."""
     
-    def __init__(self, config_path: str = "config/models.yaml"):
+    def __init__(self, config_path: str = "config/models.yaml", params_path: str = "config/model_params.yaml"):
         self.config_path = config_path
+        self.params_path = params_path
         self.config = self._load_config()
+        self.custom_params = self._load_custom_params()
         self.current_process: Optional[subprocess.Popen] = None
         self.current_model_id: Optional[str] = None
         self.cache_dir = os.path.expanduser("~/.cache/llama.cpp")
@@ -40,6 +42,93 @@ class LLMModelManager:
         
         # Return default config if file not found
         return {"models": {}, "global_settings": {}}
+    
+    def _load_custom_params(self) -> dict:
+        """Load custom model parameters from model_params.yaml."""
+        paths = [
+            self.params_path,
+            os.path.join(os.path.dirname(__file__), '..', '..', self.params_path),
+            os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'model_params.yaml'),
+        ]
+        
+        for path in paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    return yaml.safe_load(f) or {}
+        
+        return {"global_params": {}, "per_model_params": {}, "extra_params": ""}
+    
+    def save_custom_params(self) -> bool:
+        """Save custom parameters to model_params.yaml."""
+        try:
+            path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'model_params.yaml')
+            with open(path, 'w') as f:
+                yaml.dump(self.custom_params, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            return True
+        except Exception as e:
+            print(f"Failed to save custom params: {e}")
+            return False
+    
+    def get_custom_params(self) -> dict:
+        """Get all custom parameters."""
+        return self.custom_params
+    
+    def set_global_params(self, params: dict) -> bool:
+        """Set global parameters that apply to all models."""
+        self.custom_params["global_params"] = params
+        return self.save_custom_params()
+    
+    def set_model_params(self, model_id: str, params: dict) -> bool:
+        """Set custom parameters for a specific model."""
+        if "per_model_params" not in self.custom_params:
+            self.custom_params["per_model_params"] = {}
+        if params and len(params) > 0:
+            self.custom_params["per_model_params"][model_id] = params
+        elif model_id in self.custom_params["per_model_params"]:
+            del self.custom_params["per_model_params"][model_id]
+        return self.save_custom_params()
+    
+    def set_extra_params(self, extra: str) -> bool:
+        """Set extra command-line parameters."""
+        self.custom_params["extra_params"] = extra
+        return self.save_custom_params()
+    
+    def get_merged_params(self, model_id: str, base_params: dict) -> dict:
+        """Merge base params with global and per-model custom params."""
+        merged = dict(base_params)
+        
+        # Apply global params
+        global_params = self.custom_params.get("global_params", {})
+        for key, value in global_params.items():
+            if key != "extra_flags":  # extra_flags handled separately
+                merged[key] = value
+        
+        # Apply per-model params (takes precedence)
+        per_model = self.custom_params.get("per_model_params", {}).get(model_id, {})
+        for key, value in per_model.items():
+            if key != "extra_flags":
+                merged[key] = value
+        
+        return merged
+    
+    def get_extra_flags(self, model_id: Optional[str] = None) -> str:
+        """Get combined extra flags from global and per-model params."""
+        flags = []
+        
+        global_extra = self.custom_params.get("global_params", {}).get("extra_flags", "")
+        if global_extra:
+            flags.append(global_extra)
+        
+        if model_id:
+            model_extra = self.custom_params.get("per_model_params", {}).get(model_id, {}).get("extra_flags", "")
+            if model_extra:
+                flags.append(model_extra)
+        
+        extra_params = self.custom_params.get("extra_params", "")
+        if extra_params:
+            flags.append(extra_params)
+        
+        return " ".join(flags)
     
     def scan_available_models(self) -> List[Dict]:
         """Scan cache directory for available GGUF models."""
@@ -247,8 +336,18 @@ class LLMModelManager:
                     model_name = model_path or ""
                     if '/' in model_name:
                         # Handle HuggingFace model IDs like "unsloth/MiniMax-M2.5-GGUF:MXFP4_MOE"
-                        model_name = model_name.split('/')[-1].split(':')[-1]
-                        model_name = model_name.replace("_", " ").replace("-", " ").title()
+                        # Get the repo/model name part (after last /)
+                        hf_model = model_name.split('/')[-1]
+                        # Remove quantization suffix after : if present
+                        if ':' in hf_model:
+                            hf_model = hf_model.split(':')[0]
+                        # Remove -GGUF suffix if present
+                        if hf_model.endswith('-GGUF'):
+                            hf_model = hf_model[:-5]
+                        model_name = hf_model.replace("_", " ").replace("-", " ").strip()
+                        # Title case but preserve version numbers
+                        words = model_name.split()
+                        model_name = " ".join(w.title() if not any(c.isdigit() for c in w) else w for w in words)
                     
                     return {
                         "pid": proc.info['pid'],
@@ -326,7 +425,8 @@ class LLMModelManager:
         if not os.path.exists(binary_path):
             return False, f"llama-server binary not found: {binary_path}"
         
-        params = model.get("llama_server_params", self._get_default_params())
+        base_params = model.get("llama_server_params", self._get_default_params())
+        params = self.get_merged_params(model_id, base_params)
         
         cmd = [binary_path]
         
@@ -385,6 +485,12 @@ class LLMModelManager:
         
         # Enable Jinja templating for chat formats
         cmd.append("--jinja")
+        
+        # Add extra custom flags
+        extra_flags = self.get_extra_flags(model_id)
+        if extra_flags:
+            import shlex
+            cmd.extend(shlex.split(extra_flags))
         
         print(f"🚀 Starting llama-server with model: {model['name']}")
         print(f"   Command: {' '.join(cmd)}")

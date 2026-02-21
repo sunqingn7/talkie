@@ -156,6 +156,42 @@
                             <div class="model-list" id="llm-model-list">
                                 <!-- LLM models will be populated here -->
                             </div>
+                            
+                            <!-- Global Parameters Section -->
+                            <div class="model-params-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: pointer;" onclick="document.getElementById('global-params-content').style.display = document.getElementById('global-params-content').style.display === 'none' ? 'block' : 'none';">
+                                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+                                        <i class="fas fa-sliders" style="margin-right: 8px;"></i>Global & Extra Settings
+                                    </h4>
+                                    <i class="fas fa-chevron-down" style="color: var(--text-secondary); font-size: 12px;"></i>
+                                </div>
+                                <div id="global-params-content" style="display: none;">
+                                    <!-- Global Parameters -->
+                                    <div style="margin-bottom: 12px;">
+                                        <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                            Global Parameters <span style="color: var(--text-secondary);">(apply to all models)</span>
+                                        </label>
+                                        <input type="text" id="global-params-input"
+                                            placeholder='e.g., {"temperature": 0.7}'
+                                            style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace;">
+                                    </div>
+                                    
+                                    <!-- Extra Command-Line Flags -->
+                                    <div style="margin-bottom: 12px;">
+                                        <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                            Extra Flags
+                                        </label>
+                                        <input type="text" id="extra-params-input"
+                                            placeholder='e.g., --log-disable --verbose'
+                                            style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace;">
+                                    </div>
+                                    
+                                    <button class="tool-btn" id="save-global-params-btn" style="width: 100%; font-size: 12px;">
+                                        <i class="fas fa-save"></i> Save Global Settings
+                                    </button>
+                                </div>
+                            </div>
+                            
                             <div class="model-actions" style="margin-top: 16px; display: flex; gap: 8px;">
                                 <button class="tool-btn" id="restart-llm-btn" style="flex: 1;">
                                     <i class="fas fa-rotate"></i> Restart Server

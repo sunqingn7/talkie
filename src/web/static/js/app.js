@@ -16,6 +16,7 @@ class TalkieApp {
         this.currentModels = null;
         this.attachments = []; // Store uploaded file info
         this.isMusicPlaying = false;
+        this.customParams = null;
         
         this.init();
     }
@@ -97,6 +98,11 @@ class TalkieApp {
         // LLM Model management
         document.getElementById('restart-llm-btn')?.addEventListener('click', () => {
             this.restartLLMServer();
+        });
+        
+        // Global parameters
+        document.getElementById('save-global-params-btn')?.addEventListener('click', () => {
+            this.saveGlobalParams();
         });
         
         // TTS Speaker test button
@@ -703,6 +709,22 @@ class TalkieApp {
                 this.showNotification(data.message, data.success ? 'success' : 'error');
                 break;
                 
+            case 'model_params':
+                this.customParams = data.params || {global_params: {}, per_model_params: {}, extra_params: ''};
+                this.updateGlobalParamsDisplay();
+                // Refresh model list to show params in each card
+                if (this.currentModels) {
+                    this.updateModelsList(this.currentModels);
+                }
+                break;
+                
+            case 'model_params_saved':
+                this.showNotification(data.message, data.success ? 'success' : 'error');
+                if (data.success) {
+                    this.customParams = data.params || this.customParams;
+                }
+                break;
+                
             case 'history_cleared':
                 this.clearChatDisplay();
                 this.showNotification('Conversation history cleared', 'success');
@@ -1096,6 +1118,8 @@ class TalkieApp {
                 const isActive = model.id === data.current_llm_model || 
                     (data.current_llm_model && data.current_llm_model.includes(model.file));
                 const canSelect = model.exists;
+                const modelParams = this.customParams?.per_model_params?.[model.id] || {};
+                const paramsValue = Object.keys(modelParams).length > 0 ? JSON.stringify(modelParams) : '';
                 
                 return `
                     <div class="model-item ${isActive ? 'active' : ''} ${!canSelect ? 'disabled' : ''}" 
@@ -1103,32 +1127,46 @@ class TalkieApp {
                          data-model-type="llm"
                          style="${!canSelect ? 'opacity: 0.5; cursor: not-allowed;' : ''}">
                         <div class="model-info-text">
-                            <div class="model-name">${model.name}</div>
+                            <div class="model-name">${model.name} ${isActive ? '<span class="model-badge active" style="font-size: 10px; margin-left: 8px;">Active</span>' : ''} ${!canSelect ? '<span class="model-badge" style="font-size: 10px; margin-left: 8px;">Not Downloaded</span>' : ''}</div>
                             <div class="model-meta">${model.parameters || 'Unknown params'} • ${model.size} • ${model.quantization || 'Unknown'}</div>
                             <div class="model-desc" style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${model.description || ''}</div>
                         </div>
-                        ${isActive ? 
-                            '<span class="model-badge active">Active</span>' : 
-                            (!canSelect ? '<span class="model-badge">Not Downloaded</span>' : '')
-                        }
+                        <div class="model-params-input" style="margin-top: 10px; width: 100%;">
+                            <textarea class="model-param-field"
+                                   data-model-id="${model.id}"
+                                   placeholder='Custom parameters (JSON), e.g., {"ctx_size": 65536, "temperature": 0.8}'
+                                   onclick="event.stopPropagation();"
+                                   onchange="window.talkieApp && window.talkieApp.saveModelParamFromInput('${model.id}', this.value)"
+                                   style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace; min-height: 50px; resize: vertical; line-height: 1.4;">${this.escapeHtml(paramsValue)}</textarea>
+                        </div>
                     </div>
                 `;
             }).join('');
             
-            // Add click handlers for LLM models
+            // Click handlers for switching models
             llmModelList.querySelectorAll('.model-item').forEach(item => {
-                item.addEventListener('click', () => {
+                item.addEventListener('click', (e) => {
+                    if (e.target.tagName === 'TEXTAREA') return;
+                    
                     const modelId = item.dataset.modelId;
                     const isDisabled = item.classList.contains('disabled');
+                    const isActive = item.classList.contains('active');
                     
-                    if (!isDisabled && !item.classList.contains('active')) {
-                        if (confirm(`Switch to ${modelId}? This will restart the LLM server and may take a moment.`)) {
+                    if (!isDisabled && !isActive) {
+                        if (confirm(`Switch to this model? This will restart the LLM server.`)) {
                             this.switchLLMModel(modelId);
+                        }
+                    } else if (isActive) {
+                        if (confirm('Restart the current model?')) {
+                            this.restartLLMServer();
                         }
                     }
                 });
             });
         }
+        
+        // Load custom parameters from server
+        this.loadModelParams();
     }
     
     switchTTSModel(modelId) {
@@ -1142,6 +1180,74 @@ class TalkieApp {
     restartLLMServer() {
         if (confirm('Restart the LLM server? Current conversation will be interrupted.')) {
             this.sendSystemMessage('restart_llm_server');
+        }
+    }
+    
+    loadModelParams() {
+        this.sendSystemMessage('get_model_params');
+    }
+    
+    saveModelParamFromInput(modelId, value) {
+        let modelParams = {};
+        
+        if (value && value.trim()) {
+            try {
+                modelParams = JSON.parse(value);
+            } catch (e) {
+                this.showNotification(`Invalid JSON for ${modelId}`, 'error');
+                return;
+            }
+        }
+        
+        this.sendSystemMessage('set_model_params', {
+            model_id: modelId,
+            model_params: modelParams
+        });
+        
+        // Update local cache
+        if (!this.customParams) this.customParams = {global_params: {}, per_model_params: {}, extra_params: ''};
+        if (!this.customParams.per_model_params) this.customParams.per_model_params = {};
+        if (Object.keys(modelParams).length > 0) {
+            this.customParams.per_model_params[modelId] = modelParams;
+        } else {
+            delete this.customParams.per_model_params[modelId];
+        }
+    }
+    
+    saveGlobalParams() {
+        const globalInput = document.getElementById('global-params-input');
+        const extraInput = document.getElementById('extra-params-input');
+        
+        let globalParams = {};
+        
+        try {
+            if (globalInput?.value?.trim()) {
+                globalParams = JSON.parse(globalInput.value);
+            }
+        } catch (e) {
+            this.showNotification('Invalid JSON in global parameters', 'error');
+            return;
+        }
+        
+        this.sendSystemMessage('set_model_params', {
+            global_params: globalParams,
+            extra_params: extraInput?.value || ''
+        });
+    }
+    
+    updateGlobalParamsDisplay() {
+        if (!this.customParams) return;
+        
+        const globalInput = document.getElementById('global-params-input');
+        const extraInput = document.getElementById('extra-params-input');
+        
+        if (globalInput) {
+            const globalParams = this.customParams.global_params || {};
+            globalInput.value = Object.keys(globalParams).length > 0 ? JSON.stringify(globalParams) : '';
+        }
+        
+        if (extraInput) {
+            extraInput.value = this.customParams.extra_params || '';
         }
     }
     

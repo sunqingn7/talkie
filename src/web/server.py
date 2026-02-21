@@ -2099,6 +2099,42 @@ async def websocket_endpoint(websocket: WebSocket):
                     "timestamp": datetime.now().isoformat()
                 })
                 await websocket.send_json(web_interface.get_llm_status())
+            
+            elif message_type == "get_model_params":
+                params = web_interface.model_manager.get_custom_params()
+                await websocket.send_json({
+                    "type": "model_params",
+                    "params": params,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            elif message_type == "set_model_params":
+                global_params = data.get("global_params")
+                model_id = data.get("model_id")
+                model_params = data.get("model_params")
+                extra_params = data.get("extra_params")
+                
+                success = True
+                
+                if global_params is not None:
+                    if not web_interface.model_manager.set_global_params(global_params):
+                        success = False
+                
+                if model_id and model_params is not None:
+                    if not web_interface.model_manager.set_model_params(model_id, model_params):
+                        success = False
+                
+                if extra_params is not None:
+                    if not web_interface.model_manager.set_extra_params(extra_params):
+                        success = False
+                
+                await websocket.send_json({
+                    "type": "model_params_saved",
+                    "success": success,
+                    "message": "Parameters saved" if success else "Failed to save parameters",
+                    "params": web_interface.model_manager.get_custom_params(),
+                    "timestamp": datetime.now().isoformat()
+                })
                     
             elif message_type == "clear_history":
                 web_interface.conversation_history.clear()
