@@ -49,7 +49,8 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"[ConnectionManager] Connected! Total: {len(self.active_connections)}, id={id(self)}")
+        print(f"[ConnectionManager] Connected! Total: {len(self.active_connections)}, id={id(self)}", flush=True)
+        import sys; sys.stdout.flush()
     
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
@@ -157,10 +158,10 @@ class WebTalkieInterface:
         """Initialize MCP server and LLM client."""
         print("🚀 Initializing Talkie Web Interface...")
         
-        # Initialize MCP server - pass config_path and session_memory to ensure shared instance
+        # Initialize MCP server - pass config_path, session_memory, and web_interface to ensure shared instance
         config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'settings.yaml')
         print(f"[Web Server] Passing session memory to MCP server: {self.session_memory.session_id}")
-        self.mcp_server = TalkieMCPServer(config_path, session_memory=self.session_memory)
+        self.mcp_server = TalkieMCPServer(config_path, session_memory=self.session_memory, web_interface=self)
         await self.mcp_server.initialize()
         
         # Initialize LLM - use orchestrator if multi-LLM config exists
@@ -394,6 +395,11 @@ class WebTalkieInterface:
                 file_reading_tool = self.mcp_server.tools.get('read_file_chunk')
                 if file_reading_tool:
                     try:
+                        # Stop any existing chat TTS before starting file reading
+                        tts_tool = self.mcp_server.tools.get('speak')
+                        if tts_tool:
+                            tts_tool.stop_audio(reason="file_reading")
+                        
                         result = await file_reading_tool.execute(url=url_to_read, action="read")
                         print(f"[URL Auto-Read] Result: {result}")
                         
@@ -401,6 +407,7 @@ class WebTalkieInterface:
                             return {
                                 "type": "assistant_message",
                                 "content": f"Started reading the webpage. You can say 'pause' to pause, 'stop' to stop.",
+                                "skip_voice": True,  # Don't speak in chat channel - file reading handles it
                                 "timestamp": datetime.now().isoformat()
                             }
                         else:
@@ -457,14 +464,15 @@ class WebTalkieInterface:
                     "timestamp": datetime.now().isoformat()
                 }
             else:
-                # Legacy single LLM client
+                # Legacy single LLM client - run in executor to avoid blocking event loop
                 tools = self.llm_client.format_tools_for_llm(tools_dict)
-
-                # Debug: Log available tools
                 print(f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}")
-
-                # Get LLM response
-                response = self.llm_client.chat_completion(messages, tools=tools)
+                
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.llm_client.chat_completion(messages, tools=tools)
+                )
             
             if "error" in response and "choices" not in response:
                 return {
@@ -575,8 +583,12 @@ class WebTalkieInterface:
                     "content": error_msg
                 })
         
-        # Get final response after tool execution
-        final_response = self.llm_client.chat_completion(messages)
+        # Get final response after tool execution - run in executor to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        final_response = await loop.run_in_executor(
+            None,
+            lambda: self.llm_client.chat_completion(messages)
+        )
         
         if "choices" in final_response:
             final_content = final_response["choices"][0]["message"].get("content", "")
@@ -897,6 +909,7 @@ CRITICAL RULES:
             "current_edge_voice": current_edge_voice,
             "llm_models": llm_models,
             "current_llm_model": running_model.get("model_path") if running_model else None,
+            "current_llm_model_name": running_model.get("model_name") if running_model else None,
             "llm_server_running": running_model is not None,
             "timestamp": datetime.now().isoformat()
         }
@@ -1577,6 +1590,11 @@ CRITICAL RULES:
     async def read_file_aloud(self, content: str = None, file_path: str = None, start_paragraph: int = 1, language: str = "auto") -> dict:
         """Read file content aloud with paragraph-by-paragraph TTS."""
         try:
+            # Stop any existing chat TTS before starting file reading
+            tts_tool = self.mcp_server.tools.get('speak')
+            if tts_tool:
+                tts_tool.stop_audio(reason="file_reading")
+            
             if self.mcp_server and 'read_file_aloud' in self.mcp_server.tools:
                 reader_tool = self.mcp_server.tools['read_file_aloud']
                 result = await reader_tool.execute(
@@ -1933,6 +1951,7 @@ async def restart_llm_server():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time chat."""
     await web_interface.manager.connect(websocket)
+    print(f"[WebSocket] Client connected, total connections: {len(web_interface.manager.active_connections)}")
     
     # Send initial status
     await websocket.send_json(web_interface.get_system_status())
@@ -1944,6 +1963,10 @@ async def websocket_endpoint(websocket: WebSocket):
             # Receive message
             data = await websocket.receive_json()
             message_type = data.get("type")
+            
+            # Only log non-polling messages
+            if message_type not in ['get_status', 'get_models', 'get_model_params', 'get_qwen_tts_info', 'get_reading_status', 'get_llm_status']:
+                print(f"[WebSocket] Received: {message_type}, connections: {len(web_interface.manager.active_connections)}, manager_id: {id(web_interface.manager)}, web_interface_id: {id(web_interface)}", flush=True)
             
             if message_type == "user_message":
                 content = data.get("content", "")
@@ -2070,6 +2093,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             elif message_type == "switch_llm_model":
                 model_id = data.get("model_id")
+                print(f"[WebSocket] switch_llm_model received: model_id={model_id}")
                 if model_id:
                     # Send switching notification
                     await websocket.send_json({
@@ -2079,10 +2103,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     
                     result = await web_interface.switch_llm_model(model_id)
+                    print(f"[WebSocket] switch_llm_model result: {result}")
                     await websocket.send_json(result)
                     
                     # Send updated status
-                    await websocket.send_json(web_interface.get_llm_status())
+                    await websocket.send_json(web_interface.get_available_models())
             
             elif message_type == "restart_llm_server":
                 await websocket.send_json({
@@ -2219,7 +2244,13 @@ Features:
 
 Press Ctrl+C to stop
 """)
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        ws_ping_interval=30,  # Send ping every 30 seconds
+        ws_ping_timeout=60,   # Wait 60 seconds for pong response
+    )
 
 
 if __name__ == "__main__":

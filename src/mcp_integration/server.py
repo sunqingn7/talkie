@@ -20,12 +20,13 @@ from core.voice_daemon import get_voice_daemon, VoiceDaemon
 class TalkieMCPServer:
     """MCP Server that exposes all assistant capabilities as tools."""
     
-    def __init__(self, config_path: str = "config/settings.yaml", session_memory=None):
+    def __init__(self, config_path: str = "config/settings.yaml", session_memory=None, web_interface=None):
         self.config = self._load_config(config_path)
         self.server = Server(self.config["mcp"]["server_name"])
         self.tools = {}
         self.voice_daemon: Optional[VoiceDaemon] = None
         self._external_session_memory = session_memory  # Store external session memory if provided
+        self._web_interface = web_interface
         self._register_tools()
         
     def _load_config(self, path: str) -> dict:
@@ -158,7 +159,7 @@ class TalkieMCPServer:
         # This replaces the old read_file_aloud for better control
         from tools.file_reading_tool import FileReadingTool
         
-        self.tools["read_file_chunk"] = FileReadingTool(self.config)
+        self.tools["read_file_chunk"] = FileReadingTool(self.config, web_interface=self._web_interface)
         self.tools["read_file_chunk"].set_session_memory(self.session_memory)
         self.tools["read_file_chunk"].set_voice_daemon(self.voice_daemon)
         

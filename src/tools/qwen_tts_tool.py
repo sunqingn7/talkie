@@ -1,6 +1,7 @@
 """
 Qwen3 TTS Tool - Local Text-to-Speech using Qwen3-TTS models
 Supports CustomVoice (predefined speakers) and VoiceDesign (natural language voice design).
+Can use streaming TTS server for lower latency.
 """
 
 import asyncio
@@ -102,8 +103,57 @@ class QwenTTSTool(BaseTool):
         self.current_audio_type = None
         self._model = None
         self._model_loaded = False
+        self._model_loading = False
+        self._load_error = None
         self._device = qwen_config.get("device", "cuda:0")
         self._dtype = qwen_config.get("dtype", "bfloat16")
+        
+        self.use_streaming_server = qwen_config.get("use_streaming_server", True)
+        self.streaming_server_host = qwen_config.get("streaming_server_host", "localhost")
+        self.streaming_server_port = qwen_config.get("streaming_server_port", 8083)
+        self._server_client = None
+        self._server_start_attempted = False
+        
+        # Always load local model as backup (in case streaming server fails)
+        # This ensures we have a working TTS even if server crashes
+        self._start_background_load()
+    
+    def _get_server_client(self, auto_start: bool = False):
+        """Get or create TTS server client."""
+        if self._server_client is None:
+            try:
+                from tools.tts_server_client import TTSServerClient
+                self._server_client = TTSServerClient(
+                    host=self.streaming_server_host,
+                    port=self.streaming_server_port,
+                    auto_start=False  # Don't auto-start, we control it manually
+                )
+            except ImportError:
+                print("[Qwen TTS] TTS server client not available")
+                return None
+        return self._server_client
+    
+    def is_server_available(self) -> bool:
+        """Check if TTS streaming server is available."""
+        client = self._get_server_client()
+        if client:
+            return client.is_server_running()
+        return False
+    
+    def start_streaming_server(self) -> bool:
+        """Start the TTS streaming server."""
+        if self._server_start_attempted:
+            # Already tried to start, just check if it's running
+            client = self._get_server_client()
+            if client and client.is_server_running():
+                return True
+            return False
+        
+        self._server_start_attempted = True
+        client = self._get_server_client()
+        if client:
+            return client.start_server()
+        return False
     
     def set_audio_type(self, audio_type: str):
         """Set the type of audio that will be played (chat or file)."""
@@ -154,48 +204,88 @@ class QwenTTSTool(BaseTool):
         self.current_instruct = instruct
         print(f"[Qwen TTS] Instruct set to: {instruct[:50]}..." if len(instruct) > 50 else f"[Qwen TTS] Instruct set to: {instruct}")
     
+    def _start_background_load(self):
+        """Start loading model in background thread."""
+        import threading
+        import time
+        
+        def load_in_background():
+            # Small delay to let server fully start
+            time.sleep(2)
+            self._model_loading = True
+            self._load_error = None
+            try:
+                self._load_model_sync()
+            except Exception as e:
+                self._load_error = str(e)
+                print(f"[Qwen TTS] Background load failed: {e}")
+            finally:
+                self._model_loading = False
+        
+        thread = threading.Thread(target=load_in_background, daemon=True)
+        thread.start()
+        print("[Qwen TTS] Scheduled model loading in background (2s delay)...")
+    
+    def _load_model_sync(self):
+        """Synchronously load the model (called from background thread)."""
+        import time
+        import torch
+        from qwen_tts import Qwen3TTSModel
+        
+        model_id = self.MODEL_TYPES.get(self.model_type)
+        if not model_id:
+            raise ValueError(f"Unknown model type: {self.model_type}")
+        
+        print(f"[Qwen TTS] Loading model: {model_id}")
+        load_start = time.time()
+        
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        dtype = dtype_map.get(self._dtype, torch.bfloat16)
+        
+        self._model = Qwen3TTSModel.from_pretrained(
+            model_id,
+            device_map=self._device,
+            dtype=dtype,
+            attn_implementation="flash_attention_2",
+        )
+        self._model_loaded = True
+        load_time = time.time() - load_start
+        print(f"[Qwen TTS] Model loaded successfully in {load_time:.2f}s!")
+    
     def _load_model(self):
-        """Load the Qwen3-TTS model."""
+        """Load the Qwen3-TTS model (waits if loading in background)."""
         if self._model_loaded and self._model is not None:
             return True
         
-        try:
-            import torch
-            from qwen_tts import Qwen3TTSModel
+        if self._load_error:
+            print(f"[Qwen TTS] Model load previously failed: {self._load_error}")
+            return False
+        
+        # If model is loading in background, wait for it
+        if self._model_loading:
+            print(f"[Qwen TTS] Waiting for background model load to complete...")
+            import time
+            max_wait = 120  # 2 minutes
+            waited = 0
+            while self._model_loading and waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
             
-            model_id = self.MODEL_TYPES.get(self.model_type)
-            if not model_id:
-                print(f"[Qwen TTS] Error: Unknown model type '{self.model_type}'")
+            if self._model_loaded:
+                return True
+            if self._load_error:
+                print(f"[Qwen TTS] Model load failed: {self._load_error}")
                 return False
-            
-            print(f"[Qwen TTS] Loading model: {model_id}")
-            
-            dtype_map = {
-                "bfloat16": torch.bfloat16,
-                "float16": torch.float16,
-                "float32": torch.float32,
-            }
-            dtype = dtype_map.get(self._dtype, torch.bfloat16)
-            
-            self._model = Qwen3TTSModel.from_pretrained(
-                model_id,
-                device_map=self._device,
-                dtype=dtype,
-                attn_implementation="flash_attention_2",
-            )
-            self._model_loaded = True
-            print(f"[Qwen TTS] Model loaded successfully")
-            return True
-            
-        except ImportError as e:
-            print(f"[Qwen TTS] Error: qwen-tts package not installed. Run: pip install -U qwen-tts")
-            print(f"[Qwen TTS] ImportError: {e}")
+            print(f"[Qwen TTS] Model load timed out")
             return False
-        except Exception as e:
-            print(f"[Qwen TTS] Error loading model: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+        
+        # Not loading, not loaded - start loading
+        self._start_background_load()
+        return self._load_model()  # Recursively wait
     
     def _play_audio(self, audio_file: str):
         """Play audio file using system player."""
@@ -210,6 +300,11 @@ class QwenTTSTool(BaseTool):
     
     def stop_audio(self, reason: str = ""):
         """Stop current audio playback."""
+        # If we're asked to stop for chat but current audio is file reading, don't stop
+        if reason == "chat" and self.current_audio_type == "file":
+            print(f"[Qwen TTS] Skipping stop - current audio is file reading")
+            return
+        
         if self.current_audio_process:
             try:
                 self.current_audio_process.terminate()
@@ -250,6 +345,88 @@ class QwenTTSTool(BaseTool):
         if audio_type:
             self.set_audio_type(audio_type)
         
+        if self.use_streaming_server:
+            result = await self._execute_via_server(text)
+            if result.get("success"):
+                return result
+            # Server not ready, fall back to local
+            print(f"[Qwen TTS] Streaming server not ready, using local: {result.get('error')}")
+        
+        return await self._execute_local(text)
+    
+    async def _execute_via_server(self, text: str) -> Dict[str, Any]:
+        """Execute TTS via streaming server."""
+        client = self._get_server_client()
+        if client is None:
+            return {"success": False, "error": "TTS server client not available"}
+        
+        # Check if server is running and ready
+        if not client.is_server_running():
+            if not self._server_start_attempted:
+                # First time - try to start the server
+                print("[Qwen TTS] Starting TTS streaming server...")
+                self.start_streaming_server()
+            
+            # After starting (or if already attempted), check if ready
+            if not client.is_server_running():
+                # Server process started but not ready yet (loading model)
+                return {"success": False, "error": "TTS server not ready (still loading model)"}
+        
+        try:
+            print(f"[Qwen TTS] Generating speech via streaming server: {text[:50]}...")
+            start_time = time.time()
+            
+            audio_chunks = []
+            async for chunk in client.synthesize_stream(
+                text=text,
+                backend="qwen_tts",
+                voice=self.current_speaker,
+                language=self._normalize_language_for_server(self.current_language),
+                speed=1.0
+            ):
+                audio_chunks.append(chunk)
+            
+            if not audio_chunks:
+                return {"success": False, "error": "No audio received from server"}
+            
+            audio_data = b"".join(audio_chunks)
+            gen_time = time.time() - start_time
+            print(f"[Qwen TTS] Server generated in {gen_time:.2f}s")
+            
+            output_file = os.path.join(self.temp_dir, f"qwen_tts_{int(time.time())}.wav")
+            with open(output_file, "wb") as f:
+                f.write(audio_data)
+            
+            audio_process = None
+            if self.voice_output != "web":
+                audio_process = self._play_audio(output_file)
+                if audio_process:
+                    self.current_audio_process = audio_process
+                    self.is_playing = True
+            
+            return {
+                "success": True,
+                "text": text,
+                "model_type": self.model_type,
+                "speaker": self.current_speaker,
+                "language": self.current_language,
+                "output_file": output_file,
+                "audio_file": output_file,
+                "audio_process": audio_process,
+                "voice_output": self.voice_output,
+                "generation_time": gen_time,
+                "via_server": True
+            }
+            
+        except Exception as e:
+            print(f"[Qwen TTS] Server synthesis error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": f"Server synthesis failed: {str(e)}"}
+    
+    async def _execute_local(self, text: str) -> Dict[str, Any]:
+        """Execute TTS locally (original implementation)."""
+        
         if not self._load_model():
             return {
                 "success": False,
@@ -266,6 +443,8 @@ class QwenTTSTool(BaseTool):
             
             start_time = time.time()
             
+            print(f"[Qwen TTS] About to call model.generate, text_len={len(text)}, is_voice_design={is_voice_design}")
+            
             if is_voice_design:
                 wavs, sr = self._model.generate_voice_design(
                     text=text,
@@ -281,7 +460,7 @@ class QwenTTSTool(BaseTool):
                 )
             
             gen_time = time.time() - start_time
-            print(f"[Qwen TTS] Generated in {gen_time:.2f}s")
+            print(f"[Qwen TTS] Generated in {gen_time:.2f}s, wav shape: {wavs[0].shape if hasattr(wavs[0], 'shape') else 'N/A'}")
             
             output_file = os.path.join(self.temp_dir, f"qwen_tts_{int(time.time())}.wav")
             sf.write(output_file, wavs[0], sr)
@@ -319,6 +498,26 @@ class QwenTTSTool(BaseTool):
                 "success": False,
                 "error": f"Qwen TTS failed: {str(e)}"
             }
+    
+    def _normalize_language_for_server(self, language: str) -> str:
+        """Normalize language for the TTS server."""
+        if not language or language == "Auto":
+            return "Auto"
+        
+        lang_map = {
+            "Chinese": "zh",
+            "English": "en", 
+            "Japanese": "ja",
+            "Korean": "ko",
+            "German": "de",
+            "French": "fr",
+            "Russian": "ru",
+            "Portuguese": "pt",
+            "Spanish": "es",
+            "Italian": "it",
+        }
+        
+        return lang_map.get(language, language.lower()[:2])
     
     def cleanup(self):
         """Clean up temporary files."""

@@ -193,8 +193,12 @@ class VoiceAssistant:
         # Format tools for LLM
         tools = self.llm_client.format_tools_for_llm(self.mcp_server.tools)
         
-        # Get LLM response
-        response = self.llm_client.chat_completion(context_messages, tools=tools)
+        # Get LLM response - run in executor to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self.llm_client.chat_completion(context_messages, tools=tools)
+        )
         
         if "error" in response and "choices" not in response:
             print(f"❌ Error: {response['error']}")
@@ -347,9 +351,13 @@ class VoiceAssistant:
                     "error": str(e)
                 })
         
-        # Get final response after tool execution
+        # Get final response after tool execution - run in executor to avoid blocking event loop
         print("🤔 Processing tool results...")
-        final_response = self.llm_client.chat_completion(messages)
+        loop = asyncio.get_event_loop()
+        final_response = await loop.run_in_executor(
+            None,
+            lambda: self.llm_client.chat_completion(messages)
+        )
         
         if "choices" in final_response:
             final_content = final_response["choices"][0]["message"].get("content", "")

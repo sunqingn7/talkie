@@ -25,6 +25,28 @@ class LLMModelManager:
         self.current_process: Optional[subprocess.Popen] = None
         self.current_model_id: Optional[str] = None
         self.cache_dir = os.path.expanduser("~/.cache/llama.cpp")
+        self._current_timeout = 120  # Default timeout in seconds
+        
+    def get_current_timeout(self) -> int:
+        """Get the current timeout value for LLM requests."""
+        return self._current_timeout
+    
+    def _parse_talkie_timeout(self, extra_flags: str) -> int:
+        """Parse --talkie_timeout N from extra flags."""
+        import shlex
+        try:
+            args = shlex.split(extra_flags)
+            for i, arg in enumerate(args):
+                if arg == "--talkie_timeout" and i + 1 < len(args):
+                    return int(args[i + 1])
+        except:
+            pass
+        return 120  # Default
+    
+    def set_timeout_from_extra_flags(self, model_id: Optional[str] = None):
+        """Update timeout from extra flags."""
+        extra_flags = self.get_extra_flags(model_id)
+        self._current_timeout = self._parse_talkie_timeout(extra_flags)
         
     def _load_config(self) -> dict:
         """Load model configuration."""
@@ -53,8 +75,21 @@ class LLMModelManager:
         
         for path in paths:
             if os.path.exists(path):
-                with open(path, 'r') as f:
-                    return yaml.safe_load(f) or {}
+                try:
+                    with open(path, 'r') as f:
+                        data = yaml.safe_load(f)
+                        # Ensure we always return a valid dict with required keys
+                        if data is None:
+                            data = {}
+                        if "global_params" not in data:
+                            data["global_params"] = {}
+                        if "per_model_params" not in data:
+                            data["per_model_params"] = {}
+                        if "extra_params" not in data:
+                            data["extra_params"] = ""
+                        return data
+                except Exception as e:
+                    print(f"Warning: Failed to load {path}: {e}")
         
         return {"global_params": {}, "per_model_params": {}, "extra_params": ""}
     
@@ -75,6 +110,9 @@ class LLMModelManager:
     
     def set_global_params(self, params: dict) -> bool:
         """Set global parameters that apply to all models."""
+        # Ensure params is a valid dict, not None
+        if params is None:
+            params = {}
         self.custom_params["global_params"] = params
         return self.save_custom_params()
     
@@ -97,14 +135,15 @@ class LLMModelManager:
         """Merge base params with global and per-model custom params."""
         merged = dict(base_params)
         
-        # Apply global params
-        global_params = self.custom_params.get("global_params", {})
+        # Apply global params (handle None case)
+        global_params = self.custom_params.get("global_params") or {}
         for key, value in global_params.items():
             if key != "extra_flags":  # extra_flags handled separately
                 merged[key] = value
         
         # Apply per-model params (takes precedence)
-        per_model = self.custom_params.get("per_model_params", {}).get(model_id, {})
+        per_model_params = self.custom_params.get("per_model_params") or {}
+        per_model = per_model_params.get(model_id) or {}
         for key, value in per_model.items():
             if key != "extra_flags":
                 merged[key] = value
@@ -115,12 +154,15 @@ class LLMModelManager:
         """Get combined extra flags from global and per-model params."""
         flags = []
         
-        global_extra = self.custom_params.get("global_params", {}).get("extra_flags", "")
+        global_params = self.custom_params.get("global_params") or {}
+        global_extra = global_params.get("extra_flags", "")
         if global_extra:
             flags.append(global_extra)
         
         if model_id:
-            model_extra = self.custom_params.get("per_model_params", {}).get(model_id, {}).get("extra_flags", "")
+            per_model_params = self.custom_params.get("per_model_params") or {}
+            model_params = per_model_params.get(model_id) or {}
+            model_extra = model_params.get("extra_flags", "")
             if model_extra:
                 flags.append(model_extra)
         
@@ -294,9 +336,7 @@ class LLMModelManager:
             "no_mmap": False,
             "cont_batching": True,
             "flash_attn": True,
-            "embeddings": True,
-            "main_gpu": 1,
-            "tensor_split": "4,1"
+            "embeddings": True
         }
     
     def get_running_model(self) -> Optional[Dict]:
@@ -402,100 +442,158 @@ class LLMModelManager:
     
     def start_server(self, model_id: str, wait_for_ready: bool = True) -> Tuple[bool, str]:
         """Start llama-server with specified model."""
-        # Get model configuration
-        models = self.scan_available_models()
-        model = next((m for m in models if m["id"] == model_id), None)
-        
-        if not model:
-            return False, f"Model '{model_id}' not found"
-        
-        if not model.get("exists"):
-            return False, f"Model file not found: {model.get('file')}"
-        
-        # Stop any running server
-        if not self.stop_server():
-            return False, "Failed to stop existing server"
-        
-        # Build command
-        binary_path = self.config.get("global_settings", {}).get(
-            "binary_path", 
-            "/home/qing/Project/llama.cpp/build/bin/llama-server"
-        )
-        
-        if not os.path.exists(binary_path):
-            return False, f"llama-server binary not found: {binary_path}"
-        
-        base_params = model.get("llama_server_params", self._get_default_params())
-        params = self.get_merged_params(model_id, base_params)
-        
-        cmd = [binary_path]
-        
-        # Add model
-        cmd.extend(["-m", model["path"]])
-        
-        # Add parameters
-        if params.get("ctx_size"):
-            cmd.extend(["-c", str(params["ctx_size"])])
-        
-        if params.get("threads"):
-            cmd.extend(["-t", str(params["threads"])])
-        
-        if params.get("threads_batch"):
-            cmd.extend(["-tb", str(params["threads_batch"])])
-        
-        if params.get("n_gpu_layers") is not None:
-            cmd.extend(["-ngl", str(params["n_gpu_layers"])])
-        
-        if params.get("batch_size"):
-            cmd.extend(["-b", str(params["batch_size"])])
-        
-        if params.get("parallel"):
-            cmd.extend(["--parallel", str(params["parallel"])])
-        
-        if params.get("host"):
-            cmd.extend(["--host", params["host"]])
-        
-        if params.get("port"):
-            cmd.extend(["--port", str(params["port"])])
-        
-        if params.get("mlock"):
-            cmd.append("--mlock")
-        
-        if params.get("no_mmap"):
-            cmd.append("--no-mmap")
-        
-        if params.get("cont_batching"):
-            cmd.append("--cont-batching")
-        
-        if params.get("flash_attn"):
-            # Use explicit 'on' value to avoid parsing issues with next argument
-            cmd.extend(["--flash-attn", "on"])
-        
-        if params.get("embeddings"):
-            cmd.append("--embeddings")
-        
-        if params.get("numa"):
-            cmd.extend(["--numa", params["numa"]])
-        
-        if params.get("main_gpu") is not None:
-            cmd.extend(["--main-gpu", str(params["main_gpu"])])
-        
-        if params.get("tensor_split"):
-            cmd.extend(["-ts", params["tensor_split"]])
-        
-        # Enable Jinja templating for chat formats
-        cmd.append("--jinja")
-        
-        # Add extra custom flags
-        extra_flags = self.get_extra_flags(model_id)
-        if extra_flags:
-            import shlex
-            cmd.extend(shlex.split(extra_flags))
-        
-        print(f"🚀 Starting llama-server with model: {model['name']}")
-        print(f"   Command: {' '.join(cmd)}")
-        
         try:
+            # Get model configuration
+            models = self.scan_available_models()
+            model = next((m for m in models if m["id"] == model_id), None)
+            
+            if not model:
+                return False, f"Model '{model_id}' not found"
+            
+            if not model.get("exists"):
+                return False, f"Model file not found: {model.get('file')}"
+            
+            # Stop any running server
+            if not self.stop_server():
+                return False, "Failed to stop existing server"
+            
+            # Build command
+            binary_path = self.config.get("global_settings", {}).get(
+                "binary_path", 
+                "/home/qing/Project/llama.cpp/build/bin/llama-server"
+            )
+            
+            if not os.path.exists(binary_path):
+                return False, f"llama-server binary not found: {binary_path}"
+            
+            base_params = model.get("llama_server_params") or self._get_default_params()
+            params = self.get_merged_params(model_id, base_params)
+            
+            cmd = [binary_path]
+            
+            # Add model
+            cmd.extend(["-m", model["path"]])
+            
+            # Add parameters
+            if params.get("ctx_size"):
+                cmd.extend(["-c", str(params["ctx_size"])])
+            
+            if params.get("threads"):
+                cmd.extend(["-t", str(params["threads"])])
+            
+            if params.get("threads_batch"):
+                cmd.extend(["-tb", str(params["threads_batch"])])
+            
+            if params.get("n_gpu_layers") is not None:
+                cmd.extend(["-ngl", str(params["n_gpu_layers"])])
+            
+            if params.get("batch_size"):
+                cmd.extend(["-b", str(params["batch_size"])])
+            
+            if params.get("parallel"):
+                cmd.extend(["--parallel", str(params["parallel"])])
+            
+            if params.get("host"):
+                cmd.extend(["--host", params["host"]])
+            
+            if params.get("port"):
+                cmd.extend(["--port", str(params["port"])])
+            
+            if params.get("mlock"):
+                cmd.append("--mlock")
+            
+            if params.get("no_mmap"):
+                cmd.append("--no-mmap")
+            
+            if params.get("cont_batching"):
+                cmd.append("--cont-batching")
+            
+            if params.get("flash_attn"):
+                cmd.extend(["--flash-attn", "on"])
+            
+            if params.get("embeddings"):
+                cmd.append("--embeddings")
+            
+            if params.get("numa"):
+                cmd.extend(["--numa", params["numa"]])
+            
+            if params.get("main_gpu") is not None:
+                cmd.extend(["--main-gpu", str(params["main_gpu"])])
+            
+            if params.get("tensor_split"):
+                cmd.extend(["-ts", params["tensor_split"]])
+            
+            # Enable Jinja templating for chat formats
+            cmd.append("--jinja")
+            
+            # Add extra custom flags (with conflict detection and replacement)
+            extra_flags = self.get_extra_flags(model_id)
+            if extra_flags:
+                import shlex
+                extra_args = shlex.split(extra_flags)
+                
+                # Parse extra args into dict: {flag: value_or_None}
+                extra_dict = {}
+                i = 0
+                while i < len(extra_args):
+                    arg = extra_args[i]
+                    # Handle --talkie_timeout specially (talkie internal, not passed to llama-server)
+                    if arg == "--talkie_timeout":
+                        if i + 1 < len(extra_args):
+                            extra_dict[arg] = extra_args[i + 1]
+                            i += 2
+                        else:
+                            extra_dict[arg] = None
+                            i += 1
+                    # Determine if this arg expects a value
+                    elif arg in ("-c", "-t", "-tb", "-ngl", "-b", "--parallel", "--host", "--port",
+                               "--flash-attn", "--numa", "--main-gpu", "-ts"):
+                        if i + 1 < len(extra_args):
+                            extra_dict[arg] = extra_args[i + 1]
+                            i += 2
+                        else:
+                            extra_dict[arg] = None
+                            i += 1
+                    else:
+                        # Boolean flags or unknown flags
+                        extra_dict[arg] = None
+                        i += 1
+                
+                # Define which params can be replaced (including --talkie_timeout which is internal)
+                replaceable_params = {
+                    "-c", "-t", "-tb", "-ngl", "-b", "--parallel", "--host", "--port",
+                    "--flash-attn", "--numa", "--main-gpu", "-ts", "--mlock", "--no-mmap",
+                    "--cont-batching", "--embeddings", "--talkie_timeout"
+                }
+                
+                # Build new cmd: skip params that will be replaced
+                new_cmd = [cmd[0]]  # Keep binary path
+                i = 1
+                while i < len(cmd):
+                    if cmd[i] in replaceable_params and cmd[i] in extra_dict:
+                        # Skip this param and its value if it has one
+                        if cmd[i] not in ("--mlock", "--no-mmap", "--cont-batching", "--embeddings", "--jinja"):
+                            i += 2  # Skip flag and value
+                        else:
+                            i += 1  # Skip boolean flag
+                    else:
+                        new_cmd.append(cmd[i])
+                        i += 1
+                
+                # Add extra args
+                for arg, value in extra_dict.items():
+                    new_cmd.append(arg)
+                    if value is not None:
+                        new_cmd.append(value)
+                
+                cmd = new_cmd
+            
+            # Update timeout from extra flags
+            self.set_timeout_from_extra_flags(model_id)
+            
+            print(f"🚀 Starting llama-server with model: {model['name']}")
+            print(f"   Command: {' '.join(cmd)}")
+            
             # Start server process
             process = subprocess.Popen(
                 cmd,
@@ -519,6 +617,9 @@ class LLMModelManager:
                 return True, "Server started (not waiting for ready)"
                 
         except Exception as e:
+            import traceback
+            print(f"❌ Error starting server: {e}")
+            traceback.print_exc()
             return False, f"Failed to start server: {str(e)}"
     
     def _wait_for_server_ready(self, host: str, port: int, timeout: int = 60) -> bool:

@@ -572,7 +572,9 @@ body {
 
 .model-item.active {
     border-color: var(--primary-color);
-    background: rgba(99, 102, 241, 0.1);
+    border-width: 3px;
+    background: rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.3);
 }
 
 .model-info-text {
@@ -963,6 +965,24 @@ body {
 #tts-speaker-select option:checked {
     background: var(--primary-color);
     color: white;
+}
+
+/* Qwen TTS Instruction Input */
+#qwen-instruct-input {
+    cursor: text;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    position: relative;
+    z-index: 1;
+}
+
+#qwen-instruct-input:focus {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+#qwen-instruct-input::placeholder {
+    color: var(--text-muted);
 }
 
 /* Speaker Info Card */

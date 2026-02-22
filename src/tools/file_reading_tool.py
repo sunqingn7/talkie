@@ -57,16 +57,17 @@ class FileReadingTool(BaseTool):
     - Position persistence across sessions
     """
     
-    def __init__(self, config: dict, session_memory=None, voice_daemon=None):
+    def __init__(self, config: dict, session_memory=None, voice_daemon=None, web_interface=None):
         super().__init__(config)
         self.session_memory = session_memory
         self.voice_daemon = voice_daemon
+        self.web_interface = web_interface
         
         self.position_manager = ReadingPositionManager(
             session_memory.memory_dir if session_memory else None
         )
         
-        self.chunk_size: int = 100
+        self.chunk_size: int = 300  # Characters for Chinese, words for English
         self.chunks_per_load: int = 3
         
         self.current_file_id: Optional[str] = None
@@ -106,18 +107,31 @@ class FileReadingTool(BaseTool):
             print(f"[FileReading] Set voice_daemon callback, voice_output={self.config.get('tts', {}).get('voice_output', 'local') if self.config else 'unknown'}")
             print(f"[FileReading] Callback is: {voice_daemon.on_audio_ready}")
     
-    def _on_audio_ready(self, audio_file: str, audio_type: str):
+    def _on_audio_ready(self, audio_file: str, audio_type: str, request=None):
         """Callback when audio is ready - broadcast to web if voice_output is 'web'."""
-        import asyncio
-        from src.web.server import web_interface
+        wi = self.web_interface
+        
+        # Get the chunk index from request metadata if available
+        chunk_index = 0
+        if request and hasattr(request, 'metadata'):
+            chunk_index = request.metadata.get('paragraph', 0)
+        
+        # Debug: print the state of web_interface
+        print(f"[FileReading] DEBUG: web_interface exists: {wi is not None}")
+        print(f"[FileReading] DEBUG: web_interface id: {id(wi) if wi else 'None'}")
+        print(f"[FileReading] DEBUG: has manager: {hasattr(wi, 'manager') if wi else 'N/A'}")
         
         manager = None
-        try:
-            manager = web_interface.manager
-        except Exception as e:
-            print(f"[FileReading] Could not get web_interface.manager: {e}")
+        if wi:
+            try:
+                manager = wi.manager
+                print(f"[FileReading] _on_audio_ready: got manager, id={id(manager)}, connections={len(manager.active_connections)}, chunk_index={chunk_index}")
+            except Exception as e:
+                print(f"[FileReading] Could not get web_interface.manager: {e}")
+        else:
+            print(f"[FileReading] DEBUG: web_interface not set on FileReadingTool!")
         
-        print(f"[FileReading] >>> _on_audio_ready ENTERED: audio_file={audio_file}, audio_type={audio_type}, manager_id={id(manager) if manager else 'None'}, connections={len(manager.active_connections) if manager else 0}")
+        print(f"[FileReading] >>> _on_audio_ready ENTERED: audio_file={audio_file}, audio_type={audio_type}, chunk_index={chunk_index}, manager_id={id(manager) if manager else 'None'}, connections={len(manager.active_connections) if manager else 0}")
         
         voice_output = 'local'
         if hasattr(self, 'config') and self.config:
@@ -129,7 +143,7 @@ class FileReadingTool(BaseTool):
             loop = get_main_event_loop()
             if loop and loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    self._broadcast_audio(audio_file, audio_type),
+                    self._broadcast_audio(audio_file, audio_type, chunk_index),
                     loop
                 )
             else:
@@ -137,20 +151,17 @@ class FileReadingTool(BaseTool):
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type))
+                        asyncio.ensure_future(self._broadcast_audio(audio_file, audio_type, chunk_index))
                     else:
                         print(f"[FileReading] Loop not running, skipping broadcast")
                 except RuntimeError as e:
                     print(f"[FileReading] No event loop: {e}, skipping broadcast")
     
-    async def _broadcast_audio(self, audio_file: str, audio_type: str):
+    async def _broadcast_audio(self, audio_file: str, audio_type: str, chunk_index: int = 0):
         """Broadcast audio to web clients."""
-        # Always get fresh reference from web_interface
-        try:
-            from src.web.server import web_interface
-            manager = web_interface.manager if hasattr(web_interface, 'manager') else None
-        except:
-            manager = None
+        # Use the stored web_interface reference
+        wi = self.web_interface
+        manager = wi.manager if wi and hasattr(wi, 'manager') else None
         
         if not audio_file:
             return
@@ -163,7 +174,7 @@ class FileReadingTool(BaseTool):
                 print(f"[FileReading] manager not ready, skipping broadcast")
                 return
             
-            print(f"[FileReading] _broadcast_audio: connections={len(manager.active_connections)}, manager_id={id(manager)}")
+            print(f"[FileReading] _broadcast_audio: connections={len(manager.active_connections)}, manager_id={id(manager)}, chunk_index={chunk_index}")
             
             if not os.path.exists(audio_file):
                 print(f"[FileReading] Audio file not found: {audio_file}")
@@ -176,7 +187,8 @@ class FileReadingTool(BaseTool):
                 "type": "audio",
                 "audio_data": audio_data,
                 "audio_type": audio_type,
-                "format": "mp3" if audio_file.endswith('.mp3') else "wav"
+                "format": "mp3" if audio_file.endswith('.mp3') else "wav",
+                "chunk_index": chunk_index
             }
             
             connections = manager.active_connections
@@ -281,6 +293,10 @@ class FileReadingTool(BaseTool):
             content = result.get('content', '')
             if not content:
                 return False, "No content extracted from URL"
+            
+            # Debug: show content info
+            print(f"[DEBUG] WebFetch returned content: {len(content)} chars, split() gives {len(content.split())} items")
+            print(f"[DEBUG] Content first 200 chars: {content[:200]}")
             
             # Generate a file_id for the URL
             import uuid
@@ -403,31 +419,40 @@ class FileReadingTool(BaseTool):
         if not self.current_content:
             return False
         
-        words = self.current_content.split()
-        start_word = min(self.current_word_index, len(words))
-        end_word = min(start_word + (self.chunk_size * self.chunks_per_load), len(words))
+        # Use character-based indexing for Chinese text
+        content = self.current_content
+        total_chars = len(content)
+        start_char = min(self.current_word_index, total_chars)  # word_index now means char_index for Chinese
+        end_char = min(start_char + (self.chunk_size * self.chunks_per_load), total_chars)
         
-        if start_word >= end_word:
+        if start_char >= end_char:
             return False
         
-        content_slice = ' '.join(words[start_word:end_word])
-        chunks = split_into_chunks(content_slice, self.chunk_size)
+        content_slice = content[start_char:end_char]
+        chunks = split_into_chunks(content_slice, self.chunk_size, min_chunk_size=100)
         
         if not chunks:
             return False
         
+        # Debug: print all chunks
+        is_chinese = len(self.current_content) > 0 and self.current_content.count(' ') < len(self.current_content) * 0.1
+        print(f"[DEBUG] Total chars: {len(self.current_content)}, chunk_size={self.chunk_size}, chunks_per_load={self.chunks_per_load}, is_chinese={is_chinese}")
+        for i, chunk in enumerate(chunks):
+            print(f"[DEBUG] Chunk {i+1}: {len(chunk)} chars, first 50 chars: '{chunk[:50]}...'")
+        
         self.current_chunks = chunks
-        self.loaded_start_word = start_word
-        self.loaded_end_word = end_word
+        self.loaded_start_word = start_char
+        self.loaded_end_word = end_char
         self.current_chunk_index = 0
         
         self.position_manager.update_loaded_range(
             self.current_file_id,
-            start_word,
-            end_word
+            start_char,
+            end_char
         )
         
-        print(f"[FileReading] Loaded URL chunks: words {start_word}-{end_word} ({len(chunks)} chunks)")
+        total_chars = sum(len(c) for c in chunks)
+        print(f"[FileReading] Loaded URL chunks: chars {start_char}-{end_char} ({len(chunks)} chunks, ~{total_chars} total chars)")
         return True
         return True
     
@@ -459,14 +484,22 @@ class FileReadingTool(BaseTool):
                     print(f"[FileReading] No more chunks to load, finishing remaining queue")
                 total_chunks = len(self.current_chunks)
             
-            # Get current queue size from voice daemon
+            # Get current state from voice daemon
+            # We need to check if TTS is currently processing (not just if queue is empty)
+            # Because queue can be empty but TTS might still be playing previous chunk
             current_queue_size = 0
+            is_currently_speaking = False
             if self.voice_daemon:
-                current_queue_size = getattr(self.voice_daemon, 'queue_size', 0)
+                current_queue_size = self.voice_daemon.speech_queue.qsize() if hasattr(self.voice_daemon, 'speech_queue') else 0
+                is_currently_speaking = getattr(self.voice_daemon, 'is_speaking', False)
             
-            # Only add chunk if queue has room
-            if current_queue_size <= min_queue_size and self.current_chunk_index < len(self.current_chunks):
+            # Only add next chunk if:
+            # 1. Queue is empty (no pending chunks)
+            # 2. Not currently speaking (previous TTS finished)
+            # This ensures correct ordering - wait for each chunk to COMPLETE before adding next
+            if current_queue_size == 0 and not is_currently_speaking and self.current_chunk_index < len(self.current_chunks):
                 chunk = self.current_chunks[self.current_chunk_index]
+                chunk_index = self.current_chunk_index
                 self.current_chunk_index += 1
                 
                 chunk_words = len(chunk.split())
@@ -476,10 +509,10 @@ class FileReadingTool(BaseTool):
                 
                 if self.voice_daemon and self.is_reading and not self.is_paused:
                     progress = int((self.current_word_index / self.total_words) * 100) if self.total_words > 0 else 0
-                    print(f"[FileReading] Queued chunk {self.current_chunk_index}/{total_chunks} ({chunk_words} words) - {progress}%, queue={current_queue_size}")
+                    print(f"[FileReading] Queued chunk {self.current_chunk_index}/{total_chunks} ({chunk_words} words) - {progress}%, queue={current_queue_size}, speaking={is_currently_speaking}")
                     result = self.voice_daemon.speak_file_content(
                         text=chunk,
-                        paragraph_num=self.current_chunk_index,
+                        paragraph_num=chunk_index,
                         language="auto"
                     )
                     
@@ -502,13 +535,13 @@ class FileReadingTool(BaseTool):
         url: str = None,
         action: str = "read",
         chunks_per_load: int = 3,
-        chunk_size: int = 100
+        chunk_size: int = 300
     ) -> Dict[str, Any]:
         """Execute reading action."""
         print(f"[FileReading] execute() called with file_id={file_id}, url={url}, action={action}, is_reading={self.is_reading}")
         
         self.chunks_per_load = chunks_per_load if chunks_per_load else 3
-        self.chunk_size = chunk_size if chunk_size else 100
+        self.chunk_size = chunk_size if chunk_size else 300
         
         if action == "status":
             return self.get_status()
@@ -571,6 +604,10 @@ class FileReadingTool(BaseTool):
         # Update file_id to match position manager
         self.current_file_id = url_file_id
         
+        # Clear any stale stop signals before starting new file reading
+        if self.voice_daemon and hasattr(self.voice_daemon, 'stop_event'):
+            self.voice_daemon.stop_event.clear()
+        
         # Start reading in background
         if self._reading_thread and self._reading_thread.is_alive():
             return self._get_reading_status()
@@ -585,6 +622,10 @@ class FileReadingTool(BaseTool):
     
     def _start_reading(self, file_id: str = None, filename: str = None, existing_position: ReadingPosition = None) -> Dict[str, Any]:
         """Start or continue reading."""
+        # Clear any stale stop signals before starting new file reading
+        if self.voice_daemon and hasattr(self.voice_daemon, 'stop_event'):
+            self.voice_daemon.stop_event.clear()
+        
         start_word = 0
         
         if existing_position and existing_position.current_word_index > 0:

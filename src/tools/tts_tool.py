@@ -26,6 +26,7 @@ except ImportError:
     pass
 
 from . import BaseTool
+from utils.file_stream_reader import split_into_chunks
 
 
 class TTSTool(BaseTool):
@@ -110,6 +111,7 @@ class TTSTool(BaseTool):
         # Track current audio process for stopping
         self.current_audio_process = None
         self.is_playing = False
+        self.current_audio_type = None  # "chat", "file", or None
         
         # Default to multilingual model if config says so
         self.use_multilingual = self.tts_config.get("use_multilingual", True)
@@ -168,7 +170,7 @@ class TTSTool(BaseTool):
             from tools.qwen_tts_tool import QwenTTSTool
             self.qwen_tts_tool = QwenTTSTool(self.config)
             self.current_engine = "qwen_tts"
-            print("   ✅ Qwen TTS ready")
+            print("   ✅ Qwen TTS ready (loading model in background)")
             return True
         except Exception as e:
             print(f"   ⚠️  Qwen TTS initialization failed: {e}")
@@ -540,7 +542,13 @@ class TTSTool(BaseTool):
         import os
         import signal
         
-        print(f" [AUDIO DEBUG] TTSTool stop_audio called. reason={reason}, current_process: {self.current_audio_process}, edge_tts_tool: {self.edge_tts_tool}")
+        print(f" [AUDIO DEBUG] TTSTool stop_audio called. reason={reason}, audio_type={self.current_audio_type}, current_process: {self.current_audio_process}")
+        
+        # If we're asked to stop for chat but current audio is file reading, don't stop
+        if reason == "chat" and self.current_audio_type == "file":
+            print(f" [AUDIO DEBUG] TTSTool: Skipping stop - current audio is file reading")
+            return False
+        
         stopped = False
         
         # Stop local process (Coqui/pyttsx3)
@@ -610,6 +618,9 @@ class TTSTool(BaseTool):
         Args:
             audio_type: "chat" for chat responses, "file" for file reading
         """
+        
+        # Track audio type for stop_audio logic
+        self.current_audio_type = audio_type
         
         if not text or not text.strip():
             return {
@@ -811,7 +822,7 @@ class TTSTool(BaseTool):
         }
     
     async def _speak_qwen(self, text: str, language: str = "auto", speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
-        """Speak using Qwen TTS."""
+        """Speak using Qwen TTS with chunking for streaming effect."""
         if self.qwen_tts_tool is None:
             return {
                 "success": False,
@@ -840,11 +851,51 @@ class TTSTool(BaseTool):
             }
             qwen_language = lang_map.get(language.lower(), "Auto")
         
-        result = await self.qwen_tts_tool.execute(
-            text=text,
-            language=qwen_language,
-            audio_type=audio_type
-        )
+        # Chunk text for streaming effect only for chat audio (not file reading, which handles its own chunking)
+        # Only chunk if text is long enough to benefit
+        chunk_size = 50  # words per chunk - smaller for faster first-audio
+        min_chunk_size = 25  # merge short chunks with next
+        should_chunk = audio_type == "chat" and len(text.split()) > chunk_size
+        
+        if should_chunk:
+            chunks = split_into_chunks(text, chunk_size, min_chunk_size)
+        else:
+            chunks = [text]  # Single chunk
+        
+        if len(chunks) == 1:
+            # Single chunk, no need for special handling
+            result = await self.qwen_tts_tool.execute(
+                text=text,
+                language=qwen_language,
+                audio_type=audio_type
+            )
+        else:
+            # Multiple chunks - speak them sequentially
+            print(f"[TTS] Split text into {len(chunks)} chunks for streaming")
+            all_results = []
+            for i, chunk in enumerate(chunks):
+                print(f"[TTS] Processing chunk {i+1}/{len(chunks)}: {len(chunk.split())} words")
+                result = await self.qwen_tts_tool.execute(
+                    text=chunk,
+                    language=qwen_language,
+                    audio_type=audio_type
+                )
+                all_results.append(result)
+                if not result.get("success"):
+                    print(f"[TTS] Chunk {i+1} failed: {result.get('error')}")
+            
+            # Return success if at least one chunk succeeded
+            successful = [r for r in all_results if r.get("success")]
+            if successful:
+                result = successful[0]
+                result["chunks_total"] = len(chunks)
+                result["chunks_succeeded"] = len(successful)
+            else:
+                result = {
+                    "success": False,
+                    "error": "All chunks failed",
+                    "spoken": False
+                }
         
         if result.get("success"):
             result["engine"] = "qwen-tts"
@@ -853,7 +904,7 @@ class TTSTool(BaseTool):
         return result
     
     async def _speak_edge_tts(self, text: str, language: str = "en", speed: float = 1.0, audio_type: str = "chat") -> Dict[str, Any]:
-        """Speak using Microsoft Edge TTS."""
+        """Speak using Microsoft Edge TTS with chunking for streaming effect."""
         if self.edge_tts_tool is None:
             return {
                 "success": False,
@@ -881,8 +932,42 @@ class TTSTool(BaseTool):
         # This allows auto-switching to Chinese voice for Chinese content
         voice = self.edge_tts_tool._get_voice_for_language(language)
         
-        # Call Edge TTS with the appropriate voice for the language
-        result = await self.edge_tts_tool.execute(text=text, voice=voice, speed=speed)
+        # Chunk text for streaming effect only for chat audio (not file reading, which handles its own chunking)
+        chunk_size = 50  # words per chunk - smaller for faster first-audio
+        min_chunk_size = 25  # merge short chunks with next
+        should_chunk = audio_type == "chat" and len(text.split()) > chunk_size
+        
+        if should_chunk:
+            chunks = split_into_chunks(text, chunk_size, min_chunk_size)
+        else:
+            chunks = [text]  # Single chunk
+        
+        if len(chunks) == 1:
+            # Single chunk, no need for special handling
+            result = await self.edge_tts_tool.execute(text=text, voice=voice, speed=speed)
+        else:
+            # Multiple chunks - speak them sequentially
+            print(f"[Edge TTS] Split text into {len(chunks)} chunks for streaming")
+            all_results = []
+            for i, chunk in enumerate(chunks):
+                print(f"[Edge TTS] Processing chunk {i+1}/{len(chunks)}: {len(chunk.split())} words")
+                result = await self.edge_tts_tool.execute(text=chunk, voice=voice, speed=speed)
+                all_results.append(result)
+                if not result.get("success"):
+                    print(f"[Edge TTS] Chunk {i+1} failed: {result.get('error')}")
+            
+            # Return success if at least one chunk succeeded
+            successful = [r for r in all_results if r.get("success")]
+            if successful:
+                result = successful[0]
+                result["chunks_total"] = len(chunks)
+                result["chunks_succeeded"] = len(successful)
+            else:
+                result = {
+                    "success": False,
+                    "error": "All chunks failed",
+                    "spoken": False
+                }
         
         # Add engine info
         if result.get("success"):

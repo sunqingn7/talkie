@@ -172,8 +172,11 @@
                                             Global Parameters <span style="color: var(--text-secondary);">(apply to all models)</span>
                                         </label>
                                         <input type="text" id="global-params-input"
-                                            placeholder='e.g., {"temperature": 0.7}'
+                                            placeholder='e.g., {"main_gpu": 1, "tensor_split": "4,1"}'
                                             style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 11px; font-family: monospace;">
+                                        <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                                            Common: main_gpu, tensor_split, n_gpu_layers, ctx_size, threads
+                                        </div>
                                     </div>
                                     
                                     <!-- Extra Command-Line Flags -->
@@ -352,8 +355,8 @@
                                     </label>
                                     <textarea id="qwen-instruct-input" 
                                         placeholder="e.g., 用特别愤怒的语气说 / Speak in a happy, excited tone"
-                                        onchange="if(window.talkieApp){window.talkieApp.setQwenTTSInstruct(this.value)}"
-                                        style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; min-height: 60px; resize: vertical; font-family: inherit;"></textarea>
+                                        oninput="if(window.talkieApp){window.talkieApp.setQwenTTSInstruct(this.value)}"
+                                        style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; min-height: 60px; resize: vertical; font-family: inherit; outline: none;"></textarea>
                                 </div>
                                 
                                 <!-- Qwen TTS status/info -->

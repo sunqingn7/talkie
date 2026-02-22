@@ -239,6 +239,8 @@ class VoiceDaemon:
                 # Since we're already in the daemon thread with the event loop,
                 # use run_until_complete instead of run_coroutine_threadsafe
                 print(f"[VoiceDaemon] Running TTS coroutine directly in event loop...")
+                import time
+                tts_start = time.time()
                 
                 # Check stop before TTS
                 if self.stop_event.is_set():
@@ -254,7 +256,8 @@ class VoiceDaemon:
                         audio_type=request.audio_type
                     )
                 )
-                print(f"[VoiceDaemon] TTS result: success={result.get('success')}, error={result.get('error', 'None')}")
+                tts_duration = time.time() - tts_start
+                print(f"[VoiceDaemon] TTS execution took {tts_duration:.2f}s, result: success={result.get('success')}, error={result.get('error', 'None')}")
                 
                 # Check stop immediately after TTS completes
                 if self.stop_event.is_set():
@@ -290,14 +293,14 @@ class VoiceDaemon:
                                     try:
                                         audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
                                         print(f"[VoiceDaemon] Calling callback for interrupted audio: {audio_type}")
-                                        self.on_audio_ready(audio_file, audio_type)
+                                        self.on_audio_ready(audio_file, audio_type, request)
                                     except Exception as e:
                                         print(f"[VoiceDaemon] Error in callback for interrupted audio: {e}")
                                 return
                             time.sleep(0.05)  # Check every 50ms
                         print(f"[VoiceDaemon] Audio process finished")
                     else:
-                        # Fallback: old sleep method if no process available
+                        # Fallback: old sleep method if no audio process available
                         estimated_duration = len(request.text) / 15  # ~15 chars per second
                         wait_time = min(estimated_duration + 0.5, 30)
                         print(f"[VoiceDaemon] No audio process, sleeping for {wait_time:.1f}s, priority={request.priority if request else 'None'}")
@@ -313,7 +316,7 @@ class VoiceDaemon:
                                     try:
                                         audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
                                         print(f"[VoiceDaemon] Calling callback for interrupted audio: {audio_type}")
-                                        self.on_audio_ready(audio_file, audio_type)
+                                        self.on_audio_ready(audio_file, audio_type, request)
                                     except Exception as e:
                                         print(f"[VoiceDaemon] Error in callback for interrupted audio: {e}")
                                 return
@@ -335,7 +338,7 @@ class VoiceDaemon:
                             try:
                                 audio_type = "file" if request and request.priority == Priority.NORMAL else "chat"
                                 print(f"[VoiceDaemon] Calling on_audio_ready callback: audio_file={audio_file}, audio_type={audio_type}")
-                                self.on_audio_ready(audio_file, audio_type)
+                                self.on_audio_ready(audio_file, audio_type, request)
                                 print(f"[VoiceDaemon] Callback returned successfully")
                             except Exception as e:
                                 print(f"[VoiceDaemon] Error in on_audio_ready callback: {e}")

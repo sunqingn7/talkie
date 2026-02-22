@@ -1,6 +1,30 @@
 import requests
+import os
+import yaml
 from typing import Dict, List, Any, Optional
 from .base import LLMProviderBase
+
+
+def _get_talkie_timeout() -> int:
+    """Get timeout from model_params.yaml, default to 120."""
+    try:
+        path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'model_params.yaml')
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+            global_params = data.get("global_params", {})
+            if "talkie_timeout" in global_params:
+                return int(global_params["talkie_timeout"])
+            extra_params = data.get("extra_params", "")
+            if "--talkie_timeout" in extra_params:
+                import shlex
+                args = shlex.split(extra_params)
+                for i, arg in enumerate(args):
+                    if arg == "--talkie_timeout" and i + 1 < len(args):
+                        return int(args[i + 1])
+    except:
+        pass
+    return 120
 
 
 class OllamaProvider(LLMProviderBase):
@@ -31,7 +55,7 @@ class OllamaProvider(LLMProviderBase):
             
             if stream:
                 # For streaming, return iterator
-                response = requests.post(url, json=payload, stream=True, timeout=120)
+                response = requests.post(url, json=payload, stream=True, timeout=_get_talkie_timeout())
                 response.raise_for_status()
                 
                 full_content = ""
@@ -59,7 +83,7 @@ class OllamaProvider(LLMProviderBase):
                     }]
                 }
             else:
-                response = requests.post(url, json=payload, timeout=120)
+                response = requests.post(url, json=payload, timeout=_get_talkie_timeout())
                 response.raise_for_status()
                 data = response.json()
                 

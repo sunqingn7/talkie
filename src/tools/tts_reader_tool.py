@@ -418,15 +418,15 @@ class TTSReaderTool(BaseTool):
                         
                         result = self.voice_daemon.speak_file_content(
                             text=batch[:8000],
-                            paragraph_num=batch_idx + 1,
+                            paragraph_num=batch_idx,
                             language=language if language != "auto" else "auto",
                             audio_file=audio_file
                         )
 
                         if not result.get('success'):
-                            print(f"[TTSReader] ⚠️ Failed to queue batch {batch_idx+1}: {result.get('error')}")
+                            print(f"[TTSReader] ⚠️ Failed to queue batch {batch_idx}: {result.get('error')}")
                         else:
-                            print(f"[TTSReader] ✅ Queued batch {batch_idx+1}, queue position: {result.get('position')}")
+                            print(f"[TTSReader] ✅ Queued batch {batch_idx}, queue position: {result.get('position')}")
                     except Exception as e:
                         print(f"[TTSReader] ⚠️ Error queuing batch {batch_idx+1}: {e}")
                         import traceback

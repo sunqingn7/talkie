@@ -18,7 +18,88 @@ class TalkieApp {
         this.isMusicPlaying = false;
         this.customParams = null;
         
+        // Chat history for up/down arrow recall
+        this.chatHistory = [];
+        this.historyIndex = -1;
+        this.maxHistory = 20;
+        
+        // Audio queue for sequential playback
+        this.audioQueue = [];
+        this.currentAudioIndex = 0;
+        this.isAudioPlaying = false;
+        this.audioBatchOffset = 0;  // Offset to remap chunk indices for current batch
+        
         this.init();
+    }
+    
+    playNextAudio() {
+        // Guard: ensure queue exists and we're not already processing
+        if (!this.audioQueue || !Array.isArray(this.audioQueue)) {
+            console.log('[Web Audio] Queue not initialized');
+            return;
+        }
+        
+        console.log('[Web Audio] playNextAudio called: currentAudioIndex=', this.currentAudioIndex, ', audioQueue.length=', this.audioQueue.length, ', isAudioPlaying=', this.isAudioPlaying);
+        
+        // Find the next available audio in sequence, but ONLY if it's the next sequential chunk
+        // This ensures we don't skip chunks that arrive late
+        // But first, check if there are any gaps in the queue that we skipped over
+        for (let i = 0; i < this.currentAudioIndex; i++) {
+            if (this.audioQueue[i] === undefined) {
+                console.log('[Web Audio] WARNING: Gap in queue at index', i, '- audio was never received!');
+            }
+        }
+        
+        while (this.currentAudioIndex < this.audioQueue.length) {
+            const audio = this.audioQueue[this.currentAudioIndex];
+            
+            if (!audio) {
+                // Next chunk not available yet, wait for it
+                console.log('[Web Audio] Waiting for chunk', this.currentAudioIndex, '- not available yet');
+                return;
+            }
+            
+            if (!this.isAudioPlaying) {
+                this.isAudioPlaying = true;
+                console.log('[Web Audio] Playing chunk index:', this.currentAudioIndex);
+                
+                audio.onended = () => {
+                    console.log('[Web Audio] Chunk', this.currentAudioIndex, 'finished, advancing to', this.currentAudioIndex + 1);
+                    const prevIndex = this.currentAudioIndex;
+                    this.currentAudioIndex++;
+                    this.isAudioPlaying = false;
+                    console.log('[Web Audio] After increment: currentAudioIndex was', prevIndex, 'now', this.currentAudioIndex, ', isAudioPlaying=', this.isAudioPlaying);
+                    console.log('[Web Audio] Queue length:', this.audioQueue.length, ', next chunk available:', !!this.audioQueue[this.currentAudioIndex]);
+                    this.playNextAudio();
+                };
+                
+                audio.onerror = (e) => {
+                    console.error('[Web Audio] Error playing chunk', this.currentAudioIndex, e);
+                    this.currentAudioIndex++;
+                    this.isAudioPlaying = false;
+                    this.playNextAudio();
+                };
+                
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        console.log('[Web Audio] Play started successfully for chunk', this.currentAudioIndex);
+                    }).catch(e => {
+                        console.error('[Web Audio] Play rejected for chunk', this.currentAudioIndex, ':', e);
+                        this.currentAudioIndex++;
+                        this.isAudioPlaying = false;
+                        this.playNextAudio();
+                    });
+                }
+                return;
+            }
+            // Already playing, wait for it to finish
+            console.log('[Web Audio] Already playing, waiting for chunk', this.currentAudioIndex, 'to finish');
+            return;
+        }
+        
+        // Queue is empty or waiting for more chunks - don't auto-clear, wait for server to signal done
+        // or for the queue to be reset for a new session
     }
     
     init() {
@@ -41,6 +122,12 @@ class TalkieApp {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 this.sendMessage();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.recallHistory('up');
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.recallHistory('down');
             }
         });
         
@@ -652,9 +739,53 @@ class TalkieApp {
                 break;
             
             case 'audio':
-                // Receive audio from server and play in browser
+                // Receive audio from server and play in browser with proper sequencing
                 if (data.audio_data) {
-                    console.log('[Web Audio] Received audio, type:', data.audio_type);
+                    const chunkIndex = data.chunk_index || 0;
+                    console.log('[Web Audio] Received audio, type:', data.audio_type, 'chunk_index:', chunkIndex);
+                    
+                    // Initialize audio queue if not exists (or reinit if queue was cleared)
+                    if (!this.audioQueue || !Array.isArray(this.audioQueue)) {
+                        console.log('[Web Audio] Initializing audio queue');
+                        this.audioQueue = [];
+                        this.currentAudioIndex = 0;
+                        this.isAudioPlaying = false;
+                    }
+                    
+                    // Reset queue if we received a chunk with index 0 after queue was cleared
+                    // This detects a new reading session (server restarts chunk indexing from 0)
+                    if (chunkIndex === 0 && this.currentAudioIndex > 0) {
+                        console.log('[Web Audio] New session detected (chunk 0), resetting queue');
+                        this.audioQueue = [];
+                        this.currentAudioIndex = 0;
+                        this.isAudioPlaying = false;
+                    }
+                    
+                    // If we're at the end of the queue (finished playing all previous chunks)
+                    // and new chunks arrive, clear the old queue and calculate offset for remapping
+                    if (this.currentAudioIndex > 0 && this.currentAudioIndex >= this.audioQueue.length) {
+                        console.log('[Web Audio] Previous batch finished, clearing queue for new chunks');
+                        this.audioQueue = [];
+                        this.currentAudioIndex = 0;
+                        this.audioBatchOffset = 0;
+                    }
+                    
+                    // If queue is empty and we're receiving chunks with non-zero indices,
+                    // calculate the offset to remap them to start from 0
+                    let storageIndex = chunkIndex;
+                    if (this.audioQueue.length === 0 && chunkIndex > 0) {
+                        this.audioBatchOffset = chunkIndex;
+                        console.log('[Web Audio] Setting batch offset to', this.audioBatchOffset);
+                    }
+                    
+                    // Apply the batch offset to remap indices
+                    if (this.audioBatchOffset > 0) {
+                        storageIndex = chunkIndex - this.audioBatchOffset;
+                        console.log('[Web Audio] Remapping chunk index from', chunkIndex, 'to', storageIndex);
+                    }
+                    
+                    console.log('[Web Audio] Queue state before storing: length=', this.audioQueue.length, ', currentAudioIndex=', this.currentAudioIndex);
+                    
                     try {
                         const audioBytes = atob(data.audio_data);
                         const audioBuffer = new Uint8Array(audioBytes.length);
@@ -665,10 +796,18 @@ class TalkieApp {
                         const blob = new Blob([audioBuffer], { type: data.format === 'mp3' ? 'audio/mpeg' : 'audio/wav' });
                         const audioUrl = URL.createObjectURL(blob);
                         const audio = new Audio(audioUrl);
-                        audio.play();
-                        console.log('[Web Audio] Playing audio in browser');
+                        
+                        // Ensure audio is loaded and ready to play
+                        audio.load();
+                        
+                        // Store audio with its remapped index
+                        this.audioQueue[storageIndex] = audio;
+                        console.log('[Web Audio] Stored at index', storageIndex, '(orig:', chunkIndex, '), currentAudioIndex:', this.currentAudioIndex, ', isAudioPlaying:', this.isAudioPlaying, ', readyState:', audio.readyState);
+                        
+                        // Try to play if it's the next in sequence
+                        this.playNextAudio();
                     } catch (e) {
-                        console.error('[Web Audio] Error playing audio:', e);
+                        console.error('[Web Audio] Error queuing audio:', e);
                     }
                 }
                 break;
@@ -692,7 +831,7 @@ class TalkieApp {
             case 'llm_switching':
                 this.showNotification(data.message, 'info');
                 break;
-                
+            
             case 'llm_model_switched':
                 this.showNotification(data.message, data.success ? 'success' : 'error');
                 if (data.success) {
@@ -712,10 +851,8 @@ class TalkieApp {
             case 'model_params':
                 this.customParams = data.params || {global_params: {}, per_model_params: {}, extra_params: ''};
                 this.updateGlobalParamsDisplay();
-                // Refresh model list to show params in each card
-                if (this.currentModels) {
-                    this.updateModelsList(this.currentModels);
-                }
+                // Don't refresh model list here - it causes infinite loop
+                // The params are already stored in customParams
                 break;
                 
             case 'model_params_saved':
@@ -767,15 +904,50 @@ class TalkieApp {
             attachment_ids: attachmentIds
         }));
         
+        // Add to chat history for up/down arrow recall
+        if (message) {
+            this.chatHistory.push(message);
+            if (this.chatHistory.length > this.maxHistory) {
+                this.chatHistory.shift();
+            }
+            this.historyIndex = this.chatHistory.length;
+        }
+        
         // Clear input and attachments
         input.value = '';
         this.adjustTextareaHeight();
         this.clearAttachments();
     }
     
+    recallHistory(direction) {
+        if (this.chatHistory.length === 0) {
+            return;
+        }
+        
+        const input = document.getElementById('message-input');
+        
+        if (direction === 'up') {
+            if (this.historyIndex > 0) {
+                this.historyIndex--;
+            }
+        } else if (direction === 'down') {
+            if (this.historyIndex < this.chatHistory.length - 1) {
+                this.historyIndex++;
+            } else {
+                // Going past the last item - clear input
+                input.value = '';
+                this.historyIndex = this.chatHistory.length;
+                return;
+            }
+        }
+        
+        input.value = this.chatHistory[this.historyIndex] || '';
+        this.adjustTextareaHeight();
+    }
+    
     sendSystemMessage(type, data = {}) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.log('Cannot send - WebSocket not ready');
+            console.log('[sendSystemMessage] Cannot send - WebSocket not ready');
             return;
         }
         
@@ -986,7 +1158,17 @@ class TalkieApp {
                 const engineName = engineNames[data.config.tts_engine] || data.config.tts_engine || 'Unknown';
                 engineDisplay.textContent = engineName;
             }
-            document.getElementById('current-llm-model').textContent = data.config.llm_model || 'Unknown';
+            
+            // Update LLM model display - prefer running model name over config
+            const llmModelDisplay = document.getElementById('current-llm-model');
+            if (llmModelDisplay) {
+                // If we have running model info, use the friendly name
+                if (this.currentModels && this.currentModels.current_llm_model_name) {
+                    llmModelDisplay.textContent = this.currentModels.current_llm_model_name;
+                } else {
+                    llmModelDisplay.textContent = data.config.llm_model || 'Unknown';
+                }
+            }
             
             // Update voice output mode dropdown
             const voiceOutputSelect = document.getElementById('voice-output-mode');
@@ -1114,9 +1296,27 @@ class TalkieApp {
         }
         
         if (llmModelList && data.llm_models) {
-            llmModelList.innerHTML = data.llm_models.map(model => {
-                const isActive = model.id === data.current_llm_model || 
-                    (data.current_llm_model && data.current_llm_model.includes(model.file));
+            const currentPath = (data.current_llm_model || '').toLowerCase();
+            const currentName = (data.current_llm_model_name || '').toLowerCase();
+            
+            const html = data.llm_models.map(model => {
+                const modelId = (model.id || '').toLowerCase();
+                const modelFile = (model.file || '').toLowerCase();
+                const modelName = (model.name || '').toLowerCase();
+                
+                // Only match if we have a current model running
+                let isActive = false;
+                if (currentPath || currentName) {
+                    isActive = 
+                        modelId === currentPath ||
+                        modelFile === currentPath ||
+                        (currentPath && currentPath.includes(modelId)) ||
+                        (currentPath && currentPath.includes(modelFile)) ||
+                        currentName === modelName ||
+                        (currentName && currentName.includes(modelName)) ||
+                        (modelName && modelName.includes(currentName));
+                }
+                    
                 const canSelect = model.exists;
                 const modelParams = this.customParams?.per_model_params?.[model.id] || {};
                 const paramsValue = Object.keys(modelParams).length > 0 ? JSON.stringify(modelParams) : '';
@@ -1125,6 +1325,7 @@ class TalkieApp {
                     <div class="model-item ${isActive ? 'active' : ''} ${!canSelect ? 'disabled' : ''}" 
                          data-model-id="${model.id}" 
                          data-model-type="llm"
+                         onclick="window.talkieApp && window.talkieApp.handleModelClick('${model.id}', ${isActive ? 'true' : 'false'}, ${!canSelect ? 'true' : 'false'})"
                          style="${!canSelect ? 'opacity: 0.5; cursor: not-allowed;' : ''}">
                         <div class="model-info-text">
                             <div class="model-name">${model.name}</div>
@@ -1147,26 +1348,7 @@ class TalkieApp {
                 `;
             }).join('');
             
-            // Click handlers for switching models
-            llmModelList.querySelectorAll('.model-item').forEach(item => {
-                item.addEventListener('click', (e) => {
-                    if (e.target.tagName === 'TEXTAREA') return;
-                    
-                    const modelId = item.dataset.modelId;
-                    const isDisabled = item.classList.contains('disabled');
-                    const isActive = item.classList.contains('active');
-                    
-                    if (!isDisabled && !isActive) {
-                        if (confirm(`Switch to this model? This will restart the LLM server.`)) {
-                            this.switchLLMModel(modelId);
-                        }
-                    } else if (isActive) {
-                        if (confirm('Restart the current model?')) {
-                            this.restartLLMServer();
-                        }
-                    }
-                });
-            });
+            llmModelList.innerHTML = html;
         }
         
         // Load custom parameters from server
@@ -1184,6 +1366,22 @@ class TalkieApp {
     restartLLMServer() {
         if (confirm('Restart the LLM server? Current conversation will be interrupted.')) {
             this.sendSystemMessage('restart_llm_server');
+        }
+    }
+    
+    handleModelClick(modelId, isActive, isDisabled) {
+        if (isDisabled) {
+            return;
+        }
+        
+        if (isActive) {
+            if (confirm('Restart the current model?')) {
+                this.restartLLMServer();
+            }
+        } else {
+            if (confirm(`Switch to this model? This will restart the LLM server.`)) {
+                this.switchLLMModel(modelId);
+            }
         }
     }
     

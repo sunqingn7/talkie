@@ -462,7 +462,7 @@ class WebFetchTool(BaseTool):
             for i, chunk in enumerate(chunks):
                 self.voice_daemon.speak_file_content(
                     text=chunk,
-                    paragraph_num=i+1,
+                    paragraph_num=i,
                     language=detected_language  # Use detected language
                 )
             
@@ -516,7 +516,7 @@ class WebFetchTool(BaseTool):
             for i, chunk in enumerate(chunks):
                 voice_daemon.speak_file_content(
                     text=chunk,
-                    paragraph_num=i+1,
+                    paragraph_num=i,
                     language=language
                 )
             

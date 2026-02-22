@@ -112,34 +112,87 @@ def get_file_info(file_path: str) -> dict:
     }
 
 
-def split_into_chunks(text: str, chunk_size: int = 100) -> list:
+def split_into_chunks(text: str, chunk_size: int = 100, min_chunk_size: int = 25) -> list:
     """
     Split text into chunks of approximately chunk_size words.
+    For Chinese text (no spaces), uses character count instead.
+    Short chunks are merged with the next chunk to meet min_chunk_size.
     
     Args:
         text: Text to split
-        chunk_size: Words per chunk
+        chunk_size: Words per chunk (or chars for Chinese)
+        min_chunk_size: Minimum words/chars per chunk (merges short chunks with next)
         
     Returns:
         List of text chunks
     """
-    words = text.split()
-    chunks = []
-    current_chunk = []
-    current_count = 0
+    # Detect if text is Chinese (no spaces between characters)
+    is_chinese = len(text) > 0 and text.count(' ') < len(text) * 0.1
     
-    for word in words:
-        current_chunk.append(word)
-        current_count += 1
+    if is_chinese:
+        # For Chinese: split by characters
+        chars = list(text)
+        chunks = []
+        current_chunk = []
+        current_count = 0
         
-        if current_count >= chunk_size:
-            if word.endswith(('.', '!', '?')) or current_count >= chunk_size + 20:
-                chunks.append(' '.join(current_chunk))
+        for char in chars:
+            current_chunk.append(char)
+            current_count += 1
+            
+            # For Chinese, ONLY split at major sentence-ending punctuation (。！？)
+            # NOT at commas (，) or other minor punctuation
+            if char in '。！？' or current_count >= chunk_size:
+                chunk_text = ''.join(current_chunk)
+                if chunk_text.strip():
+                    chunks.append(chunk_text)
                 current_chunk = []
                 current_count = 0
+        
+        if current_chunk:
+            chunk_text = ''.join(current_chunk)
+            if chunk_text.strip():
+                chunks.append(chunk_text)
+    else:
+        # For English/European languages: split by words
+        words = text.split()
+        chunks = []
+        current_chunk = []
+        current_count = 0
+        
+        for word in words:
+            current_chunk.append(word)
+            current_count += 1
+            
+            if current_count >= chunk_size:
+                if word.endswith(('.', '!', '?')) or current_count >= chunk_size + 20:
+                    chunks.append(' '.join(current_chunk))
+                    current_chunk = []
+                    current_count = 0
+        
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
     
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
+    # Merge short chunks with the next chunk to meet min_chunk_size
+    if min_chunk_size > 0 and len(chunks) > 1:
+        merged_chunks = []
+        i = 0
+        while i < len(chunks):
+            current_chunk = chunks[i]
+            current_len = len(current_chunk) if is_chinese else len(current_chunk.split())
+            
+            # If current chunk is too short, try to merge with next chunk
+            if current_len < min_chunk_size and i + 1 < len(chunks):
+                # Merge with next chunk
+                next_chunk = chunks[i + 1]
+                merged = current_chunk + next_chunk
+                merged_chunks.append(merged)
+                i += 2  # Skip both chunks
+            else:
+                merged_chunks.append(current_chunk)
+                i += 1
+        
+        chunks = merged_chunks
     
     return chunks
 
