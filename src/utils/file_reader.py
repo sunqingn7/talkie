@@ -45,26 +45,32 @@ class TextFileReader(BaseFileReader):
     def __init__(self, file_path: str):
         self.file_path = file_path
         self._total_chars = 0
+        self._position = 0
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                self._total_chars = len(content)
+                self._content = f.read()
+                self._total_chars = len(self._content)
         except UnicodeDecodeError:
             try:
                 with open(file_path, "r", encoding="gbk") as f:
-                    content = f.read()
-                    self._total_chars = len(content)
+                    self._content = f.read()
+                    self._total_chars = len(self._content)
             except:
                 self._total_chars = os.path.getsize(file_path)
+                self._content = ""
 
     def get_total(self) -> int:
         return self._total_chars
 
     def seek(self, position: int) -> None:
-        pass  # For in-memory, just track position
+        self._position = min(position, self._total_chars)
 
     def read(self, size: int) -> str:
-        return ""  # Not used for in-memory
+        if not self._content:
+            return ""
+        text = self._content[self._position : self._position + size]
+        self._position += len(text)
+        return text
 
     def close(self) -> None:
         pass
@@ -77,6 +83,7 @@ class StreamingTextFileReader(BaseFileReader):
         self.file_path = file_path
         self._content = None
         self._total_chars = 0
+        self._position = 0
         self._load_content()
 
     def _load_content(self):
@@ -94,12 +101,14 @@ class StreamingTextFileReader(BaseFileReader):
                 self._content = ""
 
     def seek(self, position: int) -> None:
-        pass  # Just track position virtually
+        self._position = min(position, self._total_chars)
 
     def read(self, size: int) -> str:
         if not self._content:
             return ""
-        return self._content[:size]
+        text = self._content[self._position : self._position + size]
+        self._position += len(text)
+        return text
 
     def get_total(self) -> int:
         return self._total_chars

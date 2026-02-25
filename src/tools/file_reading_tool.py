@@ -373,7 +373,11 @@ class FileReadingTool(BaseTool):
             # Clear in-memory content (we're now using file)
             self.current_content = None
 
-            self.total_words = len(content.split())
+            # For URLs, use character count since the file is Chinese text
+            self._total_chars = len(content)
+            self.total_words = (
+                self._total_chars
+            )  # Store as total_words for compatibility
             self.current_word_index = start_word
             self.current_chunk_index = 0
             self.is_reading = True
@@ -546,15 +550,15 @@ class FileReadingTool(BaseTool):
         """Buffer loader for file-based reading."""
         print(f"[BufferLoader] Using file-based reading: {self.current_file_path}")
 
-        self._total_chars = 0  # Will be calculated from file
+        # Calculate total characters from file
+        self._total_chars = count_total_words(self.current_file_path)
+        print(f"[BufferLoader] Total chars in file: {self._total_chars}")
 
         # Track chunk number for dynamic sizing
         chunk_number = 0
         last_chunk_index = -1
 
-        while self.is_reading and self._read_position < (
-            self.total_words * 2
-        ):  # rough estimate
+        while self.is_reading and self._read_position < self._total_chars:
             if self.is_paused:
                 print("[BufferLoader] Paused, waiting...")
                 time.sleep(0.1)
@@ -567,17 +571,35 @@ class FileReadingTool(BaseTool):
                 time.sleep(0.2)
                 continue
 
+            # Determine target size based on chunk number (before reading)
+            chunk_number += 1
+            if chunk_number == 1:
+                target_size = 20
+            elif chunk_number == 2:
+                target_size = 40
+            else:
+                target_size = 50
+
             # Read chunks from file starting at current position
             chunks = []
             try:
+                print(
+                    f"[BufferLoader] Calling read_chunks_from_file: path={self.current_file_path}, pos={self._read_position}, target_size={target_size}"
+                )
                 chunks, actual_start, actual_end = read_chunks_from_file(
                     self.current_file_path,
                     self._read_position,
-                    50,  # chunk_size
+                    target_size,
                     1,  # chunks_per_load
+                )
+                print(
+                    f"[BufferLoader] Got {len(chunks)} chunks: {actual_start}-{actual_end}"
                 )
             except Exception as e:
                 print(f"[BufferLoader] Error reading file: {e}")
+                import traceback
+
+                traceback.print_exc()
                 break
 
             if not chunks:
@@ -590,16 +612,7 @@ class FileReadingTool(BaseTool):
                 print("[BufferLoader] Empty chunk, finished")
                 break
 
-            chunk_number += 1
             actual_size = len(chunk_text)
-
-            # Determine target size
-            if chunk_number == 1:
-                target_size = 20
-            elif chunk_number == 2:
-                target_size = 40
-            else:
-                target_size = 50
 
             print(
                 f"[BufferLoader] Loaded chunk {chunk_number}: target={target_size}, actual={actual_size}, qsize={qsize + 1}"

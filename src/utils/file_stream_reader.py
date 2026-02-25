@@ -288,16 +288,23 @@ def read_chunks_from_file(
         reader.seek(start_pos)
         # Read enough to get multiple chunks worth
         read_size = chunk_size * num_chunks * 2  # Read more, split later
-        text = reader.read(min(read_size, total - start_pos))
+        actual_read_size = min(read_size, total - start_pos)
+        text = reader.read(actual_read_size)
+        print(
+            f"[file_stream_reader] read_chunks_from_file: file={file_path}, start_pos={start_pos}, total={total}, read_size={read_size}, actual_read={actual_read_size}, text_len={len(text)}"
+        )
 
     if not text:
+        print(f"[file_stream_reader] No text read, returning empty")
         return [], start_pos, start_pos
 
     # Now split the text by sentences
     chunks = split_into_chunks(text, chunk_size)
+    print(f"[file_stream_reader] split_into_chunks returned {len(chunks)} chunks")
 
     # Take only num_chunks chunks
     chunks = chunks[:num_chunks]
+    print(f"[file_stream_reader] after slicing: {len(chunks)} chunks")
 
     # Calculate actual end position
     actual_end = start_pos + sum(len(c) for c in chunks)
