@@ -520,19 +520,40 @@ class FileReadingTool(BaseTool):
         self._total_chars = len(content)
         self._read_position = self.current_word_index  # Start from saved position
 
+        # Track chunk number for dynamic sizing
+        chunk_number = 0
+
+        # Determine if Chinese or English
+        is_chinese = content.count(" ") < len(content) * 0.1
+
         while self.is_reading and self._read_position < self._total_chars:
             if self.is_paused:
                 print("[Producer] Paused, waiting...")
                 time.sleep(0.1)
                 continue
 
-            # Read one chunk from current position
-            end_pos = min(self._read_position + self.chunk_size, self._total_chars)
-            chunk_text = content[self._read_position : end_pos]
+            # Determine target size based on chunk number
+            chunk_number += 1
+            if chunk_number == 1:
+                target_size = 20
+            elif chunk_number == 2:
+                target_size = 40
+            else:
+                target_size = 50
+
+            # Get sentences until we exceed target size
+            chunk_text = self._get_sentences_until_size(
+                content, self._read_position, target_size, is_chinese
+            )
 
             if not chunk_text or not chunk_text.strip():
                 print("[Producer] Empty chunk, finished reading")
                 break
+
+            actual_size = len(chunk_text)
+            print(
+                f"[Producer] Chunk {chunk_number}: target={target_size}, actual={actual_size}"
+            )
 
             # Put chunk in buffer (blocks if buffer is full)
             try:
@@ -554,7 +575,7 @@ class FileReadingTool(BaseTool):
             self._chunk_done_event.clear()
 
             # Move position forward
-            self._read_position = end_pos
+            self._read_position += len(chunk_text)
             self.current_word_index = self._read_position
             self.position_manager.update_word_index(
                 self.current_file_id, self._read_position
@@ -575,6 +596,155 @@ class FileReadingTool(BaseTool):
         print(
             f"[Producer] Finished reading, position={self._read_position}/{self._total_chars}"
         )
+
+    def _get_sentences_until_size(
+        self, content: str, start_pos: int, target_size: int, is_chinese: bool
+    ) -> str:
+        """Get sentences until we exceed target size."""
+        if is_chinese:
+            return self._get_chinese_sentences(content, start_pos, target_size)
+        else:
+            return self._get_english_sentences(content, start_pos, target_size)
+
+    def _get_chinese_sentences(
+        self, content: str, start_pos: int, target_size: int
+    ) -> str:
+        """Get Chinese sentences until target size is exceeded."""
+        CHINESE_EOS = "。！？"
+        CHINESE_CLAUSE = "，；："
+        NEWLINE = "\n"
+
+        text_len = len(content)
+        pos = start_pos
+
+        # Collect sentences until we exceed target
+        while pos < text_len:
+            # Find next sentence boundary
+            eos_pos = -1
+            clause_pos = -1
+            newline_pos = -1
+
+            # Look for EOS first
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in CHINESE_EOS:
+                    eos_pos = i + 1  # Include the EOS char
+                    break
+
+            # Look for clause delimiter
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in CHINESE_CLAUSE:
+                    clause_pos = i + 1
+                    break
+
+            # Look for newline
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in NEWLINE:
+                    newline_pos = i + 1
+                    break
+
+            # Determine split position - prefer EOS, then clause, then newline
+            split_pos = -1
+            if eos_pos > pos:
+                split_pos = eos_pos
+            elif clause_pos > pos:
+                split_pos = clause_pos
+            elif newline_pos > pos:
+                split_pos = newline_pos
+
+            if split_pos == -1:
+                # No boundary found, take remaining
+                split_pos = text_len
+
+            chunk = content[pos:split_pos].strip()
+            chunk_len = len(chunk)
+
+            if chunk_len >= target_size:
+                return chunk
+
+            # If chunk is smaller than target, look for more sentences
+            # But if we hit EOS, always return (even if small)
+            if eos_pos > pos:
+                return chunk
+
+            # Continue to get more sentences
+            pos = split_pos
+
+            # Safety: if we've gone way past target, stop
+            if chunk_len > target_size * 1.5:
+                return chunk
+
+        # Return whatever we have
+        return content[start_pos:pos].strip()
+
+    def _get_english_sentences(
+        self, content: str, start_pos: int, target_size: int
+    ) -> str:
+        """Get English sentences until target size is exceeded."""
+        ENGLISH_EOS = ".!?"
+        ENGLISH_CLAUSE = ",;:"
+        NEWLINE = "\n"
+
+        text_len = len(content)
+        pos = start_pos
+
+        # Collect sentences until we exceed target
+        while pos < text_len:
+            # Find next sentence boundary
+            eos_pos = -1
+            clause_pos = -1
+            newline_pos = -1
+
+            # Look for EOS first
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in ENGLISH_EOS:
+                    eos_pos = i + 1  # Include the EOS char
+                    break
+
+            # Look for clause delimiter
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in ENGLISH_CLAUSE:
+                    clause_pos = i + 1
+                    break
+
+            # Look for newline
+            for i in range(pos, min(pos + target_size * 2, text_len)):
+                if content[i] in NEWLINE:
+                    newline_pos = i + 1
+                    break
+
+            # Determine split position - prefer EOS, then clause, then newline
+            split_pos = -1
+            if eos_pos > pos:
+                split_pos = eos_pos
+            elif clause_pos > pos:
+                split_pos = clause_pos
+            elif newline_pos > pos:
+                split_pos = newline_pos
+
+            if split_pos == -1:
+                # No boundary found, take remaining
+                split_pos = text_len
+
+            chunk = content[pos:split_pos].strip()
+            chunk_len = len(chunk.split())  # Count words for English
+
+            if chunk_len >= target_size:
+                return chunk
+
+            # If chunk is smaller than target, look for more sentences
+            # But if we hit EOS, always return (even if small)
+            if eos_pos > pos:
+                return chunk
+
+            # Continue to get more sentences
+            pos = split_pos
+
+            # Safety: if we've gone way past target, stop
+            if chunk_len > target_size * 1.5:
+                return chunk
+
+        # Return whatever we have
+        return content[start_pos:pos].strip()
 
     def _consumer_loop(self):
         """Consumer thread: takes chunk from buffer and sends to TTS."""
