@@ -88,17 +88,12 @@ class FileReadingTool(BaseTool):
         self.is_reading: bool = False
         self.is_paused: bool = False
 
-        # Producer/Consumer model for file reading
-        # Buffer queue between producer (reads chunks) and consumer (sends to TTS)
+        # Buffer queue for pull-based model
+        # Buffer loader thread loads chunks on-demand, voice daemon pulls when ready
         import queue
 
-        self._chunk_buffer: queue.Queue = queue.Queue(maxsize=3)
-        self._producer_thread: Optional[threading.Thread] = None
-        self._consumer_thread: Optional[threading.Thread] = None
-
-        # Events for producer/consumer coordination
-        self._chunk_ready_event: threading.Event = threading.Event()
-        self._chunk_done_event: threading.Event = threading.Event()
+        self._chunk_buffer: queue.Queue = queue.Queue(maxsize=5)
+        self._buffer_loader_thread: Optional[threading.Thread] = None
 
         # Track reading position for progressive reading
         self._read_position: int = 0  # Character position in content
@@ -190,6 +185,11 @@ class FileReadingTool(BaseTool):
                         print(f"[FileReading] Loop not running, skipping broadcast")
                 except RuntimeError as e:
                     print(f"[FileReading] No event loop: {e}, skipping broadcast")
+
+        # After audio finishes, play next chunk from buffer
+        if self.is_reading and not self.is_paused:
+            print(f"[FileReading] Audio finished, playing next chunk...")
+            self._play_next_chunk()
 
     async def _broadcast_audio(
         self, audio_file: str, audio_type: str, chunk_index: int = 0
@@ -315,8 +315,10 @@ class FileReadingTool(BaseTool):
         return None
 
     async def _load_url(self, url: str, start_word: int = 0) -> tuple[bool, str]:
-        """Fetch URL content and initialize reading state."""
+        """Fetch URL content, save to temp file, and initialize reading state."""
         import asyncio
+        import tempfile
+        import os
 
         if not self.web_fetch_tool:
             return False, "Web fetch tool not available. Cannot read URLs."
@@ -343,13 +345,33 @@ class FileReadingTool(BaseTool):
             # Generate a file_id for the URL
             import uuid
 
-            self.current_file_id = f"url_{uuid.uuid4().hex[:8]}"
+            url_file_id = f"url_{uuid.uuid4().hex[:8]}"
+
+            # Extract title from content or use URL
+            title = result.get("title", "")
+            if not title:
+                title = url.split("/")[-1] or url
+
+            # Sanitize title for filename
+            safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:50]
+
+            # Save content to temp file (unify with file reading)
+            temp_fd, temp_path = tempfile.mkstemp(
+                suffix=".txt", prefix=f"webfetch_{safe_title}_"
+            )
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            print(f"[FileReading] Saved URL content to temp file: {temp_path}")
+
+            # Initialize reading state - use file path (same as file reading)
+            self.current_file_id = url_file_id
+            self.current_file_path = temp_path
+            self.current_file_name = title
             self._current_url = url
 
-            # Store content in memory (not to disk for URLs)
-            self.current_content = content
-            self.current_file_path = None  # URLs don't have file paths
-            self.current_file_name = url.split("/")[-1] or url
+            # Clear in-memory content (we're now using file)
+            self.current_content = None
 
             self.total_words = len(content.split())
             self.current_word_index = start_word
@@ -359,7 +381,7 @@ class FileReadingTool(BaseTool):
 
             position = ReadingPosition(
                 file_id=self.current_file_id,
-                file_path=url,  # Store URL as "file_path" for URLs
+                file_path=temp_path,  # Store temp file path
                 file_name=self.current_file_name,
                 total_words=self.total_words,
                 current_word_index=start_word,
@@ -508,28 +530,133 @@ class FileReadingTool(BaseTool):
         )
         return True
 
-    def _producer_loop(self):
-        """Producer thread: reads one chunk at a time from content and puts in buffer."""
-        print(f"[Producer] Producer thread started, is_reading={self.is_reading}")
+    def _buffer_loader_loop(self):
+        """Buffer loader thread: maintains ~5 chunks in buffer, loads on-demand."""
+        print(f"[BufferLoader] Loader thread started, is_reading={self.is_reading}")
 
-        content = self.current_content
-        if not content:
-            print("[Producer] No content to read")
-            return
+        # Use file-based reading if we have a file path, otherwise use in-memory content
+        if self.current_file_path:
+            self._buffer_loader_from_file()
+        elif self.current_content:
+            self._buffer_loader_from_content()
+        else:
+            print("[BufferLoader] No content or file to read")
 
-        self._total_chars = len(content)
-        self._read_position = self.current_word_index  # Start from saved position
+    def _buffer_loader_from_file(self):
+        """Buffer loader for file-based reading."""
+        print(f"[BufferLoader] Using file-based reading: {self.current_file_path}")
+
+        self._total_chars = 0  # Will be calculated from file
 
         # Track chunk number for dynamic sizing
         chunk_number = 0
+        last_chunk_index = -1
+
+        while self.is_reading and self._read_position < (
+            self.total_words * 2
+        ):  # rough estimate
+            if self.is_paused:
+                print("[BufferLoader] Paused, waiting...")
+                time.sleep(0.1)
+                continue
+
+            # Check if buffer has room for more chunks (max 5)
+            qsize = self._chunk_buffer.qsize()
+            if qsize >= 5:
+                # Buffer full, wait a bit
+                time.sleep(0.2)
+                continue
+
+            # Read chunks from file starting at current position
+            chunks = []
+            try:
+                chunks, actual_start, actual_end = read_chunks_from_file(
+                    self.current_file_path,
+                    self._read_position,
+                    50,  # chunk_size
+                    1,  # chunks_per_load
+                )
+            except Exception as e:
+                print(f"[BufferLoader] Error reading file: {e}")
+                break
+
+            if not chunks:
+                print("[BufferLoader] No more chunks from file, finished")
+                break
+
+            # Get the chunk
+            chunk_text = chunks[0]
+            if not chunk_text.strip():
+                print("[BufferLoader] Empty chunk, finished")
+                break
+
+            chunk_number += 1
+            actual_size = len(chunk_text)
+
+            # Determine target size
+            if chunk_number == 1:
+                target_size = 20
+            elif chunk_number == 2:
+                target_size = 40
+            else:
+                target_size = 50
+
+            print(
+                f"[BufferLoader] Loaded chunk {chunk_number}: target={target_size}, actual={actual_size}, qsize={qsize + 1}"
+            )
+
+            # Put chunk in buffer
+            self._chunk_buffer.put(chunk_text)
+
+            # Move position forward (by character count approximation)
+            self._read_position += actual_size
+            self.current_word_index = self._read_position
+
+            # Save position periodically
+            if chunk_number % 5 == 0:
+                self.position_manager.update_word_index(
+                    self.current_file_id, self._read_position
+                )
+
+            progress = min(
+                100, int((self._read_position / (self.total_words * 2)) * 100)
+            )  # rough estimate
+            print(
+                f"[BufferLoader] Buffer position={self._read_position}, qsize={self._chunk_buffer.qsize()}"
+            )
+
+        # Signal done
+        self._chunk_buffer.put(None)
+        print(f"[BufferLoader] Finished loading from file")
+
+    def _buffer_loader_from_content(self):
+        """Buffer loader for in-memory content (legacy)."""
+        print(f"[BufferLoader] Using in-memory content")
+
+        content = self.current_content
+        if not content:
+            print("[BufferLoader] No content to read")
+            return
+
+        self._total_chars = len(content)
 
         # Determine if Chinese or English
         is_chinese = content.count(" ") < len(content) * 0.1
 
+        # Track chunk number for dynamic sizing
+        chunk_number = 0
+
         while self.is_reading and self._read_position < self._total_chars:
             if self.is_paused:
-                print("[Producer] Paused, waiting...")
+                print("[BufferLoader] Paused, waiting...")
                 time.sleep(0.1)
+                continue
+
+            # Check if buffer has room for more chunks (max 5)
+            qsize = self._chunk_buffer.qsize()
+            if qsize >= 5:
+                # Buffer full, wait a bit
+                time.sleep(0.2)
                 continue
 
             # Determine target size based on chunk number
@@ -546,40 +673,27 @@ class FileReadingTool(BaseTool):
                 content, self._read_position, target_size, is_chinese
             )
 
-            if not chunk_text or not chunk_text.strip():
-                print("[Producer] Empty chunk, finished reading")
+            if not chunk_text.strip():
+                print("[BufferLoader] Empty chunk, finished reading")
                 break
 
             actual_size = len(chunk_text)
             print(
-                f"[Producer] Chunk {chunk_number}: target={target_size}, actual={actual_size}"
+                f"[BufferLoader] Loaded chunk {chunk_number}: target={target_size}, actual={actual_size}, qsize={qsize + 1}"
             )
 
-            # Put chunk in buffer (blocks if buffer is full)
-            try:
-                print(
-                    f"[Producer] Putting chunk in buffer: pos={self._read_position}, len={len(chunk_text)}"
-                )
-                self._chunk_buffer.put(chunk_text, timeout=1.0)
-            except queue.Full:
-                # Buffer full, wait a bit and retry
-                time.sleep(0.1)
-                continue
-
-            # Signal consumer that chunk is ready
-            self._chunk_ready_event.set()
-
-            # Wait for consumer to process this chunk
-            print(f"[Producer] Waiting for chunk to be processed...")
-            self._chunk_done_event.wait(timeout=30)
-            self._chunk_done_event.clear()
+            # Put chunk in buffer
+            self._chunk_buffer.put(chunk_text)
 
             # Move position forward
             self._read_position += len(chunk_text)
             self.current_word_index = self._read_position
-            self.position_manager.update_word_index(
-                self.current_file_id, self._read_position
-            )
+
+            # Save position periodically (every 5 chunks)
+            if chunk_number % 5 == 0:
+                self.position_manager.update_word_index(
+                    self.current_file_id, self._read_position
+                )
 
             progress = (
                 int((self._read_position / self._total_chars) * 100)
@@ -587,14 +701,13 @@ class FileReadingTool(BaseTool):
                 else 0
             )
             print(
-                f"[Producer] Chunk processed, position={self._read_position}/{self._total_chars}, progress={progress}%"
+                f"[BufferLoader] Buffer position={self._read_position}/{self._total_chars}, progress={progress}%, qsize={self._chunk_buffer.qsize()}"
             )
 
-        # Signal that we're done
-        self._chunk_buffer.put(None, timeout=1.0)  # None = end of content
-        self._chunk_ready_event.set()
+        # Signal that we're done - put None marker
+        self._chunk_buffer.put(None)
         print(
-            f"[Producer] Finished reading, position={self._read_position}/{self._total_chars}"
+            f"[BufferLoader] Finished loading from content, position={self._read_position}/{self._total_chars}"
         )
 
     def _get_sentences_until_size(
@@ -609,15 +722,15 @@ class FileReadingTool(BaseTool):
     def _get_chinese_sentences(
         self, content: str, start_pos: int, target_size: int
     ) -> str:
-        """Get Chinese sentences until target size is exceeded."""
+        """Get Chinese sentences: read one sentence at a time, accumulate until target size."""
         CHINESE_EOS = "。！？"
         CHINESE_CLAUSE = "，；："
         NEWLINE = "\n"
 
         text_len = len(content)
         pos = start_pos
+        chunk = ""
 
-        # Collect sentences until we exceed target
         while pos < text_len:
             # Find next sentence boundary
             eos_pos = -1
@@ -625,19 +738,19 @@ class FileReadingTool(BaseTool):
             newline_pos = -1
 
             # Look for EOS first
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in CHINESE_EOS:
-                    eos_pos = i + 1  # Include the EOS char
+                    eos_pos = i + 1
                     break
 
             # Look for clause delimiter
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in CHINESE_CLAUSE:
                     clause_pos = i + 1
                     break
 
             # Look for newline
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in NEWLINE:
                     newline_pos = i + 1
                     break
@@ -655,39 +768,43 @@ class FileReadingTool(BaseTool):
                 # No boundary found, take remaining
                 split_pos = text_len
 
-            chunk = content[pos:split_pos].strip()
-            chunk_len = len(chunk)
+            # Extract one sentence
+            sentence = content[pos:split_pos]
+            sentence_len = len(sentence.strip())
 
-            if chunk_len >= target_size:
-                return chunk
+            if sentence_len > 0:
+                # Add sentence to chunk
+                if chunk:
+                    chunk += sentence
+                else:
+                    chunk = sentence
 
-            # If chunk is smaller than target, look for more sentences
-            # But if we hit EOS, always return (even if small)
-            if eos_pos > pos:
-                return chunk
+                # Check if we've reached target size
+                if len(chunk) >= target_size:
+                    return chunk.strip()
 
-            # Continue to get more sentences
+            # Move to next position
             pos = split_pos
 
-            # Safety: if we've gone way past target, stop
-            if chunk_len > target_size * 1.5:
-                return chunk
+            # Safety: if chunk is way past target, return it
+            if len(chunk) > target_size * 1.5:
+                return chunk.strip()
 
         # Return whatever we have
-        return content[start_pos:pos].strip()
+        return chunk.strip()
 
     def _get_english_sentences(
         self, content: str, start_pos: int, target_size: int
     ) -> str:
-        """Get English sentences until target size is exceeded."""
+        """Get English sentences: read one sentence at a time, accumulate until target size."""
         ENGLISH_EOS = ".!?"
         ENGLISH_CLAUSE = ",;:"
         NEWLINE = "\n"
 
         text_len = len(content)
         pos = start_pos
+        chunk = ""
 
-        # Collect sentences until we exceed target
         while pos < text_len:
             # Find next sentence boundary
             eos_pos = -1
@@ -695,19 +812,19 @@ class FileReadingTool(BaseTool):
             newline_pos = -1
 
             # Look for EOS first
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in ENGLISH_EOS:
-                    eos_pos = i + 1  # Include the EOS char
+                    eos_pos = i + 1
                     break
 
             # Look for clause delimiter
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in ENGLISH_CLAUSE:
                     clause_pos = i + 1
                     break
 
             # Look for newline
-            for i in range(pos, min(pos + target_size * 2, text_len)):
+            for i in range(pos, min(pos + 100, text_len)):
                 if content[i] in NEWLINE:
                     newline_pos = i + 1
                     break
@@ -725,81 +842,69 @@ class FileReadingTool(BaseTool):
                 # No boundary found, take remaining
                 split_pos = text_len
 
-            chunk = content[pos:split_pos].strip()
-            chunk_len = len(chunk.split())  # Count words for English
+            # Extract one sentence
+            sentence = content[pos:split_pos]
+            sentence_len = len(sentence.strip())
 
-            if chunk_len >= target_size:
-                return chunk
+            if sentence_len > 0:
+                # Add sentence to chunk
+                if chunk:
+                    chunk += sentence
+                else:
+                    chunk = sentence
 
-            # If chunk is smaller than target, look for more sentences
-            # But if we hit EOS, always return (even if small)
-            if eos_pos > pos:
-                return chunk
+                # Check if we've reached target size (by characters)
+                if len(chunk) >= target_size:
+                    return chunk.strip()
 
-            # Continue to get more sentences
+            # Move to next position
             pos = split_pos
 
-            # Safety: if we've gone way past target, stop
-            if chunk_len > target_size * 1.5:
-                return chunk
+            # Safety: if chunk is way past target, return it
+            if len(chunk) > target_size * 1.5:
+                return chunk.strip()
 
         # Return whatever we have
-        return content[start_pos:pos].strip()
+        return chunk.strip()
 
-    def _consumer_loop(self):
-        """Consumer thread: takes chunk from buffer and sends to TTS."""
-        print(f"[Consumer] Consumer thread started")
+    def _play_next_chunk(self):
+        """Get next chunk from buffer and send to TTS. Called when audio finishes."""
+        if not self.is_reading or self.is_paused:
+            print("[FileReading] Not playing - paused or stopped")
+            return
 
-        while self.is_reading:
-            # Wait for chunk to be ready
-            self._chunk_ready_event.wait(timeout=1.0)
-            self._chunk_ready_event.clear()
+        # Get chunk from buffer
+        try:
+            chunk = self._chunk_buffer.get_nowait()
+        except queue.Empty:
+            print("[FileReading] Buffer empty, no more chunks to play")
+            self.is_reading = False
+            return
 
-            if not self.is_reading:
-                break
+        # None = end of content
+        if chunk is None:
+            print("[FileReading] No more chunks - finished reading")
+            self.is_reading = False
+            return
 
-            # Get chunk from buffer
-            try:
-                chunk = self._chunk_buffer.get_nowait()
-            except queue.Empty:
-                continue
+        # Send chunk to TTS
+        self._current_chunk_text = chunk
 
-            # None = end of content
-            if chunk is None:
-                print("[Consumer] Received end marker, stopping")
-                self.is_reading = False
-                break
+        progress = (
+            int((self._read_position / self._total_chars) * 100)
+            if self._total_chars > 0
+            else 0
+        )
+        print(f"[FileReading] Playing chunk: len={len(chunk)}, progress={progress}%")
 
-            # Send chunk to TTS
-            self._current_chunk_text = chunk
+        result = self.voice_daemon.speak_file_content(
+            text=chunk, paragraph_num=self._current_chunk_index, language="auto"
+        )
 
-            if self.voice_daemon and self.is_reading and not self.is_paused:
-                progress = (
-                    int((self._read_position / self._total_chars) * 100)
-                    if self._total_chars > 0
-                    else 0
-                )
-                print(
-                    f"[Consumer] Sending to TTS: len={len(chunk)}, progress={progress}%"
-                )
+        self._current_chunk_index += 1
 
-                result = self.voice_daemon.speak_file_content(
-                    text=chunk, paragraph_num=self._current_chunk_index, language="auto"
-                )
-
-                self._current_chunk_index += 1
-
-                if not result.get("success"):
-                    print(f"[Consumer] TTS failed: {result.get('error')}")
-            else:
-                print(
-                    f"[Consumer] Skipping TTS: voice_daemon={self.voice_daemon}, is_reading={self.is_reading}, is_paused={self.is_paused}"
-                )
-
-            # Signal producer that chunk is done
-            self._chunk_done_event.set()
-
-        print(f"[Consumer] Consumer thread stopped")
+        if not result.get("success"):
+            print(f"[FileReading] TTS failed: {result.get('error')}")
 
     def _read_background(self):
         """Background thread to read chunks with prefetching."""
@@ -979,10 +1084,8 @@ class FileReadingTool(BaseTool):
         self.is_reading = True
         self.is_paused = False
 
-        # Initialize producer/consumer model
-        self._chunk_buffer = queue.Queue(maxsize=3)
-        self._chunk_ready_event = threading.Event()
-        self._chunk_done_event = threading.Event()
+        # Initialize buffer loader model
+        self._chunk_buffer = queue.Queue(maxsize=5)
         self._current_chunk_index = 0
         self._read_position = self.current_word_index
 
@@ -993,23 +1096,18 @@ class FileReadingTool(BaseTool):
             except queue.Empty:
                 break
 
-        # Start producer and consumer threads
-        self._producer_thread = threading.Thread(
-            target=self._producer_loop, daemon=True
+        # Start buffer loader thread
+        self._buffer_loader_thread = threading.Thread(
+            target=self._buffer_loader_loop, daemon=True
         )
-        self._consumer_thread = threading.Thread(
-            target=self._consumer_loop, daemon=True
-        )
+        self._buffer_loader_thread.start()
 
-        # Signal first chunk is ready to start
-        self._chunk_ready_event.set()
+        # Play first chunk after loader fills buffer a bit
+        time.sleep(0.5)  # Give loader time to fill some chunks
+        if self.is_reading and not self.is_paused:
+            self._play_next_chunk()
 
-        self._producer_thread.start()
-        self._consumer_thread.start()
-
-        print(
-            f"[FileReading] Started producer/consumer model, position={self._read_position}"
-        )
+        print(f"[FileReading] Started buffer loader, position={self._read_position}")
 
         return self._get_reading_status()
 
@@ -1169,19 +1267,12 @@ class FileReadingTool(BaseTool):
         self.is_reading = False
         self.is_paused = False
 
-        # Signal events to unblock producer/consumer threads
-        self._chunk_ready_event.set()
-        self._chunk_done_event.set()
-
-        # Join producer/consumer threads
-        if self._producer_thread and self._producer_thread.is_alive():
-            self._producer_thread.join(timeout=2.0)
-        if self._consumer_thread and self._consumer_thread.is_alive():
-            self._consumer_thread.join(timeout=2.0)
+        # Join buffer loader thread
+        if self._buffer_loader_thread and self._buffer_loader_thread.is_alive():
+            self._buffer_loader_thread.join(timeout=2.0)
 
         # Reset thread variables
-        self._producer_thread = None
-        self._consumer_thread = None
+        self._buffer_loader_thread = None
 
         # Clear buffer
         while not self._chunk_buffer.empty():
@@ -1189,10 +1280,6 @@ class FileReadingTool(BaseTool):
                 self._chunk_buffer.get_nowait()
             except queue.Empty:
                 break
-
-        # Reset events
-        self._chunk_ready_event.clear()
-        self._chunk_done_event.clear()
 
         if self.voice_daemon:
             self.voice_daemon.stop_file_reading()
