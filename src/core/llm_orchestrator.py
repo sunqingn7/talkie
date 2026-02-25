@@ -7,46 +7,56 @@ from .llm_providers.base import LLMProviderBase
 class LLMOrchestrator:
     """
     Orchestrates multi-LLM system with main, fallback, and agents.
-    
+
     Features:
     - Auto-detects available agents on startup
     - Uses fallback when main fails
     - Parallel agent execution for responsiveness
     - MCP tools available to all LLMs
     """
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.settings = config.get("settings", {})
-        
+
         self.main_provider: Optional[LLMProviderBase] = None
         self.fallback_provider: Optional[LLMProviderBase] = None
         self.agents: Dict[str, LLMProviderBase] = {}
         self.available_agents: List[str] = []
-        
+        self.tools: Dict[str, Any] = {}  # Store tool references for execution
+
         self.parallel_agents = self.settings.get("parallel_agents", True)
         self.auto_detect_agents = self.settings.get("auto_detect_agents", True)
-        
+
         self._initialize()
-    
+
+    def set_tools(self, tools: Dict[str, Any]):
+        """Set the tool implementations for actual execution."""
+        self.tools = tools
+        print(f"[LLMOrchestrator] Tools registered: {list(tools.keys())}")
+
     def _initialize(self):
         """Initialize providers from config."""
         # Create providers using factory
         providers = LLMFactory.create_from_config(self.config)
-        
+
         self.main_provider = providers.get("main")
         self.fallback_provider = providers.get("fallback")
         self.agents = providers.get("agents", {})
-        
+
         print(f"[LLMOrchestrator] Initialized:")
-        print(f"  Main: {self.main_provider.provider_name}/{self.main_provider.model if self.main_provider else 'None'}")
-        print(f"  Fallback: {self.fallback_provider.provider_name}/{self.fallback_provider.model if self.fallback_provider else 'None'}")
+        print(
+            f"  Main: {self.main_provider.provider_name}/{self.main_provider.model if self.main_provider else 'None'}"
+        )
+        print(
+            f"  Fallback: {self.fallback_provider.provider_name}/{self.fallback_provider.model if self.fallback_provider else 'None'}"
+        )
         print(f"  Agents: {list(self.agents.keys())}")
-    
+
     async def detect_available_agents(self) -> List[str]:
         """Auto-detect which agents are available."""
         available = []
-        
+
         for agent_name, agent in self.agents.items():
             try:
                 is_avail = await agent.is_available()
@@ -57,15 +67,15 @@ class LLMOrchestrator:
                     print(f"[LLMOrchestrator] Agent '{agent_name}' is NOT available")
             except Exception as e:
                 print(f"[LLMOrchestrator] Agent '{agent_name}' check failed: {e}")
-        
+
         self.available_agents = available
         return available
-    
+
     async def initialize(self):
         """Async initialization - call detect_available_agents."""
         if self.auto_detect_agents:
             await self.detect_available_agents()
-    
+
     def _get_delegate_tool_definition(self) -> Dict[str, Any]:
         """Get the tool definition for delegating to agents."""
         return {
@@ -79,48 +89,52 @@ class LLMOrchestrator:
                         "agent": {
                             "type": "string",
                             "enum": list(self.agents.keys()),
-                            "description": "The specialized agent to delegate the task to"
+                            "description": "The specialized agent to delegate the task to",
                         },
                         "task": {
                             "type": "string",
-                            "description": "Clear description of what you need the agent to do"
+                            "description": "Clear description of what you need the agent to do",
                         },
                         "context": {
                             "type": "string",
-                            "description": "Optional context or background information for the agent"
-                        }
+                            "description": "Optional context or background information for the agent",
+                        },
                     },
-                    "required": ["agent", "task"]
-                }
-            }
+                    "required": ["agent", "task"],
+                },
+            },
         }
-    
-    def _format_tools_for_llm(self, tools: Dict[str, Any], include_delegate: bool = True) -> List[Dict]:
+
+    def _format_tools_for_llm(
+        self, tools: Dict[str, Any], include_delegate: bool = True
+    ) -> List[Dict]:
         """Format tools in OpenAI-compatible format."""
         formatted = []
-        
+
         # Add MCP tools
         for name, tool in tools.items():
-            formatted.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema
+            formatted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
                 }
-            })
-        
+            )
+
         # Add delegate tool if agents are available
         if include_delegate and self.available_agents:
             formatted.append(self._get_delegate_tool_definition())
-        
+
         return formatted
-    
+
     async def _call_provider(
-        self, 
-        provider: LLMProviderBase, 
+        self,
+        provider: LLMProviderBase,
         messages: List[Dict],
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """Call a provider with error handling."""
         try:
@@ -129,46 +143,40 @@ class LLMOrchestrator:
             print(f"[LLMOrchestrator] Provider error: {e}")
             return {
                 "error": str(e),
-                "choices": [{"message": {"content": f"Error: {str(e)}"}}]
+                "choices": [{"message": {"content": f"Error: {str(e)}"}}],
             }
-    
+
     async def _execute_agent(
-        self, 
-        agent_name: str, 
-        task: str, 
-        context: str,
-        tools: Dict[str, Any]
+        self, agent_name: str, task: str, context: str, tools: Dict[str, Any]
     ) -> str:
         """Execute a single agent and return its response."""
         agent = self.agents.get(agent_name)
         if not agent:
             return f"Error: Agent '{agent_name}' not found"
-        
+
         # Check if agent is available
         is_avail = await agent.is_available()
         if not is_avail:
             return f"Error: Agent '{agent_name}' is not available"
-        
+
         # Build messages for agent
         user_content = task
         if context:
             user_content = f"Context: {context}\n\nTask: {task}"
-        
+
         messages = agent.prepare_messages(user_content)
-        
+
         # Format tools for agent (no delegate tool for agents)
         formatted_tools = self._format_tools_for_llm(tools, include_delegate=False)
-        
+
         # Call agent
         response = await self._call_provider(agent, messages, formatted_tools)
-        
+
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
         return content or "Agent returned empty response"
-    
+
     async def _execute_agents_parallel(
-        self,
-        agent_tasks: Dict[str, Dict[str, str]],
-        tools: Dict[str, Any]
+        self, agent_tasks: Dict[str, Dict[str, str]], tools: Dict[str, Any]
     ) -> Dict[str, str]:
         """Execute multiple agents in parallel."""
         if not self.parallel_agents:
@@ -176,37 +184,31 @@ class LLMOrchestrator:
             results = {}
             for agent_name, task_info in agent_tasks.items():
                 results[agent_name] = await self._execute_agent(
-                    agent_name,
-                    task_info["task"],
-                    task_info.get("context", ""),
-                    tools
+                    agent_name, task_info["task"], task_info.get("context", ""), tools
                 )
             return results
-        
+
         # Parallel execution
         tasks = []
         for agent_name, task_info in agent_tasks.items():
             task = self._execute_agent(
-                agent_name,
-                task_info["task"],
-                task_info.get("context", ""),
-                tools
+                agent_name, task_info["task"], task_info.get("context", ""), tools
             )
             tasks.append((agent_name, task))
-        
+
         # Wait for all to complete
         results = {}
         completed = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
-        
+
         for i, (agent_name, _) in enumerate(tasks):
             result = completed[i]
             if isinstance(result, Exception):
                 results[agent_name] = f"Error: {str(result)}"
             else:
                 results[agent_name] = result
-        
+
         return results
-    
+
     def _parse_delegation(self, llm_response: str) -> Optional[Dict[str, Any]]:
         """
         Parse LLM response to detect if delegation is needed.
@@ -215,147 +217,304 @@ class LLMOrchestrator:
         # Look for delegation patterns in response
         # In a more advanced version, we'd use actual tool calling
         # For now, this is a placeholder that checks for delegation keywords
-        
+
         if "delegate_to_agent" in llm_response.lower():
             # Try to extract agent name and task
             # This would be better handled via actual function calling
             pass
-        
+
         return None
-    
+
     async def process(
         self,
         user_input: str,
         tools: Dict[str, Any],
         conversation_history: Optional[List[Dict]] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point for processing user input.
-        
+
         Flow:
         1. If no agents available, main handles everything
         2. Main LLM processes with tools + delegate tool
         3. If delegation needed, execute agents in parallel
         4. Main LLM synthesizes final response
         """
-        
+
         # Prepare messages
         messages = self.main_provider.prepare_messages(
-            user_input, 
-            conversation_history,
-            system_prompt
+            user_input, conversation_history, system_prompt
         )
-        
+
         # Format tools (include delegate tool if agents available)
         formatted_tools = self._format_tools_for_llm(tools, include_delegate=True)
-        
+
         # Step 1: Call main LLM
-        response = await self._call_provider(self.main_provider, messages, formatted_tools)
-        
+        response = await self._call_provider(
+            self.main_provider, messages, formatted_tools
+        )
+
         # Check for errors - use fallback if main fails
         if "error" in response and self.fallback_provider:
-            print(f"[LLMOrchestrator] Main failed, trying fallback...")
-            response = await self._call_provider(self.fallback_provider, messages, formatted_tools)
-            
+            print(
+                f"[LLMOrchestrator] Main failed: {response.get('error')}, trying fallback..."
+            )
+            response = await self._call_provider(
+                self.fallback_provider, messages, formatted_tools
+            )
+
             if "error" in response:
                 return {
                     "success": False,
                     "error": f"Both main and fallback failed: {response.get('error')}",
-                    "content": "I apologize, but I'm having trouble processing your request right now."
+                    "content": "I apologize, but I'm having trouble processing your request right now.",
                 }
-        
+
         # Extract content and check for tool calls
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-        tool_calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
-        
+        tool_calls = (
+            response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+        )
+
         # Step 2: Handle tool calls
         if tool_calls:
             # Process each tool call
             tool_results = []
             agent_tasks = {}  # For parallel execution
-            
+
             for tool_call in tool_calls:
                 func_name = tool_call.get("function", {}).get("name", "")
                 arguments = tool_call.get("function", {}).get("arguments", {})
-                
+
                 # Handle delegation to agent
                 if func_name == "delegate_to_agent":
                     agent_name = arguments.get("agent")
                     task = arguments.get("task", "")
                     context = arguments.get("context", "")
-                    
+
                     if agent_name in self.available_agents:
                         agent_tasks[agent_name] = {"task": task, "context": context}
                     else:
-                        tool_results.append({
-                            "tool_call_id": tool_call.get("id"),
-                            "content": f"Agent '{agent_name}' is not available"
-                        })
+                        tool_results.append(
+                            {
+                                "tool_call_id": tool_call.get("id"),
+                                "content": f"Agent '{agent_name}' is not available",
+                            }
+                        )
                 else:
-                    # Regular tool - execute via MCP (placeholder)
-                    tool_results.append({
-                        "tool_call_id": tool_call.get("id"),
-                        "content": f"Tool '{func_name}' would be executed here"
-                    })
-            
+                    # Regular tool - execute via MCP
+                    func_name = tool_call.get("function", {}).get("name", "")
+                    arguments = tool_call.get("function", {}).get("arguments", {})
+
+                    # Convert arguments from string to dict if needed
+                    if isinstance(arguments, str):
+                        import json
+
+                        try:
+                            arguments = json.loads(arguments)
+                        except:
+                            arguments = {}
+
+                    # Execute the tool if available
+                    if func_name in self.tools:
+                        tool = self.tools[func_name]
+                        try:
+                            if hasattr(tool, "execute"):
+                                result = await tool.execute(**arguments)
+                            elif hasattr(tool, "__call__"):
+                                result = await tool(**arguments)
+                            else:
+                                result = f"Tool '{func_name}' found but not executable"
+                        except Exception as e:
+                            result = f"Error executing '{func_name}': {str(e)}"
+                    else:
+                        result = f"Tool '{func_name}' not found"
+
+                    tool_results.append(
+                        {
+                            "tool_call_id": tool_call.get("id"),
+                            "content": str(result),
+                        }
+                    )
+
             # Execute agents in parallel if any
             if agent_tasks:
-                agent_responses = await self._execute_agents_parallel(agent_tasks, tools)
-                
+                agent_responses = await self._execute_agents_parallel(
+                    agent_tasks, tools
+                )
+
                 for agent_name, agent_result in agent_responses.items():
-                    tool_results.append({
-                        "tool_call_id": f"agent_{agent_name}",
-                        "content": f"[{agent_name}]: {agent_result}"
-                    })
-                
+                    tool_results.append(
+                        {
+                            "tool_call_id": f"agent_{agent_name}",
+                            "content": f"[{agent_name}]: {agent_result}",
+                        }
+                    )
+
+            # Always make second LLM call after tool execution to get final response
+            if tool_results:
                 # Add tool results to messages and get final response
-                messages.append({
-                    "role": "assistant",
-                    "content": content
-                })
-                messages.append({
-                    "role": "system",
-                    "content": "Here are the results from tools/agents:\n" + 
-                              "\n".join([r["content"] for r in tool_results])
-                })
-                
+                messages.append({"role": "assistant", "content": content})
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "Here are the results from tools/agents:\n"
+                        + "\n".join([r["content"] for r in tool_results]),
+                    }
+                )
+
                 # Get final synthesized response
-                final_response = await self._call_provider(self.main_provider, messages, None)
-                content = final_response.get("choices", [{}])[0].get("message", {}).get("content", content)
-        
+                final_response = await self._call_provider(
+                    self.main_provider, messages, None
+                )
+                content = (
+                    final_response.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", content)
+                )
+
         return {
             "success": True,
             "content": content,
-            "provider": self.main_provider.provider_name if self.main_provider else "unknown",
+            "provider": self.main_provider.provider_name
+            if self.main_provider
+            else "unknown",
             "model": self.main_provider.model if self.main_provider else "unknown",
-            "used_agents": list(self.available_agents) if self.available_agents else []
+            "used_agents": list(self.available_agents) if self.available_agents else [],
         }
-    
+
+    async def switch_provider(
+        self, provider_type: str, new_provider: str, model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Switch the main or fallback provider at runtime.
+
+        Args:
+            provider_type: "main" or "fallback"
+            new_provider: Provider name (e.g., "llamacpp", "vllm")
+            model: Optional model name (uses config default if not provided)
+
+        Returns:
+            Dict with success status and new provider info
+        """
+        if provider_type not in ("main", "fallback"):
+            return {
+                "success": False,
+                "error": f"Invalid provider_type: {provider_type}",
+            }
+
+        # Get current config for the provider type
+        if provider_type == "main":
+            current_config = self.config.get("main", {})
+        else:
+            current_config = self.config.get("fallback", {}) or {}
+
+        # Build new config
+        new_config = {
+            "provider": new_provider,
+            "model": model or current_config.get("model", ""),
+            "api_key": current_config.get("api_key", ""),
+            "base_url": current_config.get("base_url", ""),
+            "system_prompt": current_config.get("system_prompt", ""),
+            "max_tokens": current_config.get("max_tokens", 512),
+            "temperature": current_config.get("temperature", 0.7),
+        }
+
+        # If switching to vllm and no model specified, get available models from vllm
+        if new_provider == "vllm" and not model:
+            try:
+                # Always use port 8000 for vllm
+                vllm_config = new_config.copy()
+                vllm_config["base_url"] = "http://localhost:8000"
+                print(
+                    f"[LLMOrchestrator] Getting vLLM models, base_url: {vllm_config['base_url']}"
+                )
+                # Create temp provider to get models
+                temp_provider = LLMFactory.create("vllm", vllm_config)
+                if temp_provider:
+                    models = await temp_provider.list_models()
+                    print(f"[LLMOrchestrator] vLLM available models: {models}")
+                    if models:
+                        new_config["model"] = models[0]["id"]
+                        new_config["base_url"] = "http://localhost:8000"
+                        print(
+                            f"[LLMOrchestrator] Auto-selected vLLM model: {new_config['model']}"
+                        )
+            except Exception as e:
+                print(f"[LLMOrchestrator] Failed to get vLLM models: {e}")
+
+        # Create new provider
+        new_provider_instance = LLMFactory.create(new_provider, new_config)
+
+        if not new_provider_instance:
+            return {
+                "success": False,
+                "error": f"Failed to create provider: {new_provider}",
+            }
+
+        # Replace the provider
+        if provider_type == "main":
+            self.main_provider = new_provider_instance
+        else:
+            self.fallback_provider = new_provider_instance
+
+        print(
+            f"[LLMOrchestrator] Switched {provider_type} provider to {new_provider}/{new_config['model']}"
+        )
+
+        return {
+            "success": True,
+            "provider": new_provider,
+            "model": new_config["model"],
+            "provider_type": provider_type,
+        }
+
     async def get_status(self) -> Dict[str, Any]:
         """Get current status of all providers."""
+        # Check if main provider is available
+        main_available = False
+        if self.main_provider:
+            try:
+                main_available = await self.main_provider.is_available()
+            except Exception as e:
+                print(
+                    f"[LLMOrchestrator] Error checking main provider availability: {e}"
+                )
+
         status = {
+            "running": main_available,  # For frontend compatibility
             "main": {
-                "provider": self.main_provider.provider_name if self.main_provider else None,
+                "provider": self.main_provider.provider_name
+                if self.main_provider
+                else None,
                 "model": self.main_provider.model if self.main_provider else None,
-                "available": await self.main_provider.is_available() if self.main_provider else False
+                "available": main_available,
             },
             "fallback": {
-                "provider": self.fallback_provider.provider_name if self.fallback_provider else None,
-                "model": self.fallback_provider.model if self.fallback_provider else None,
-                "available": await self.fallback_provider.is_available() if self.fallback_provider else False
-            } if self.fallback_provider else None,
+                "provider": self.fallback_provider.provider_name
+                if self.fallback_provider
+                else None,
+                "model": self.fallback_provider.model
+                if self.fallback_provider
+                else None,
+                "available": await self.fallback_provider.is_available()
+                if self.fallback_provider
+                else False,
+            }
+            if self.fallback_provider
+            else None,
             "agents": {},
             "available_agents": self.available_agents,
-            "settings": self.settings
+            "settings": self.settings,
         }
-        
+
         # Check each agent
         for agent_name, agent in self.agents.items():
             status["agents"][agent_name] = {
                 "provider": agent.provider_name,
                 "model": agent.model,
-                "available": agent_name in self.available_agents
+                "available": agent_name in self.available_agents,
             }
-        
+
         return status

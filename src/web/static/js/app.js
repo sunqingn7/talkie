@@ -1239,6 +1239,14 @@ class TalkieApp {
             this.updateEngineUI(data.current_tts_engine);
         }
         
+        // Update LLM Provider selector
+        const providerSelect = document.getElementById('llm-provider-select');
+        if (providerSelect && data.llm_providers) {
+            providerSelect.innerHTML = data.llm_providers.map(provider => `
+                <option value="${provider}">${provider}</option>
+            `).join('');
+        }
+        
         // Update Edge TTS voices
         const edgeVoiceSelect = document.getElementById('edge-voice-select');
         if (edgeVoiceSelect && data.edge_voices) {
@@ -1382,6 +1390,13 @@ class TalkieApp {
             if (confirm(`Switch to this model? This will restart the LLM server.`)) {
                 this.switchLLMModel(modelId);
             }
+        }
+    }
+    
+    handleProviderChange(provider) {
+        if (!provider) return;
+        if (confirm(`Switch to ${provider}? This will restart the server.`)) {
+            this.sendSystemMessage('switch_llm_provider', { provider: provider });
         }
     }
     

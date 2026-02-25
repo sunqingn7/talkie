@@ -14,6 +14,9 @@ numpy>=1.21.0
 # TTS Backends
 edge-tts>=6.1.0
 
-# Optional: Qwen TTS (uncomment to use)
-# qwen-tts>=0.1.0
+# Qwen TTS - Direct transformers approach for streaming
+# pip install transformers torch torchaudio flash-attn
 # torch>=2.0.0
+# transformers>=4.40.0
+# torchaudio>=2.0.0
+# flash-attn (optional, for faster inference)

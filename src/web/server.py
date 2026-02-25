@@ -16,13 +16,21 @@ from contextlib import asynccontextmanager
 
 URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+', re.IGNORECASE)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    Request,
+    UploadFile,
+    File,
+    Form,
+)
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mcp_integration.server import TalkieMCPServer
 from core.llm_client import LLMClient
@@ -33,6 +41,7 @@ from tools.file_attachment_tool import FileAttachmentTool
 # Import new multi-LLM components
 try:
     from core.llm_orchestrator import LLMOrchestrator
+
     MULTI_LLM_AVAILABLE = True
 except ImportError:
     MULTI_LLM_AVAILABLE = False
@@ -40,59 +49,72 @@ except ImportError:
 import yaml
 import os
 
+
 class ConnectionManager:
     """Manage WebSocket connections."""
-    
+
     def __init__(self):
         self.active_connections: List[WebSocket] = []
-    
+
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"[ConnectionManager] Connected! Total: {len(self.active_connections)}, id={id(self)}", flush=True)
-        import sys; sys.stdout.flush()
-    
+        print(
+            f"[ConnectionManager] Connected! Total: {len(self.active_connections)}, id={id(self)}",
+            flush=True,
+        )
+        import sys
+
+        sys.stdout.flush()
+
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
-        print(f"[ConnectionManager] Disconnected! Total: {len(self.active_connections)}, id={id(self)}")
-    
+        print(
+            f"[ConnectionManager] Disconnected! Total: {len(self.active_connections)}, id={id(self)}"
+        )
+
     async def send_message(self, message: dict, websocket: WebSocket):
         await websocket.send_json(message)
-    
+
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
             await connection.send_json(message)
-    
+
     async def broadcast_audio(self, audio_file: str, audio_type: str = "chat"):
         """Broadcast audio file to all connected clients."""
         if not os.path.exists(audio_file):
             print(f"[Web Audio] File not found: {audio_file}")
             return
-        
+
         # Read audio file as base64
         import base64
+
         try:
-            with open(audio_file, 'rb') as f:
-                audio_data = base64.b64encode(f.read()).decode('utf-8')
-            
+            with open(audio_file, "rb") as f:
+                audio_data = base64.b64encode(f.read()).decode("utf-8")
+
             message = {
                 "type": "audio",
                 "audio_data": audio_data,
                 "audio_type": audio_type,
-                "format": "mp3" if audio_file.endswith('.mp3') else "wav"
+                "format": "mp3" if audio_file.endswith(".mp3") else "wav",
             }
-            
-            print(f"[Web Audio] About to broadcast to {len(web_interface.manager.active_connections)} connections, manager_id={id(web_interface.manager)}")
+
+            print(
+                f"[Web Audio] About to broadcast to {len(web_interface.manager.active_connections)} connections, manager_id={id(web_interface.manager)}"
+            )
             for connection in web_interface.manager.active_connections:
                 await connection.send_json(message)
-            print(f"[Web Audio] Broadcast complete to {len(web_interface.manager.active_connections)} clients")
+            print(
+                f"[Web Audio] Broadcast complete to {len(web_interface.manager.active_connections)} clients"
+            )
         except Exception as e:
             print(f"[Web Audio] Error broadcasting audio: {e}")
 
 
 class WebTalkieInterface:
     """Web interface for Talkie voice assistant."""
-    
+
     def __init__(self, config_path: str = "config/settings.yaml"):
         self.config = self._load_config(config_path)
         self.mcp_server: Optional[TalkieMCPServer] = None
@@ -103,129 +125,165 @@ class WebTalkieInterface:
         self.manager = ConnectionManager()
         self.model_manager = get_model_manager("config/models.yaml")
         self.file_attachment_tool = None
-        self.pending_attachments: List[dict] = []  # Store uploaded files waiting to be attached
-        
+        self.pending_attachments: List[
+            dict
+        ] = []  # Store uploaded files waiting to be attached
+
         # Check if multi-LLM config exists
-        self.llm_config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'llm_config.yaml')
+        self.llm_config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "llm_config.yaml"
+        )
         if os.path.exists(self.llm_config_path) and MULTI_LLM_AVAILABLE:
             self.use_orchestrator = True
             print("[Web Interface] Multi-LLM config found, will use orchestrator")
-        
+
         # Initialize session memory for persistent conversation tracking
         self.session_memory: SessionMemory = get_session_memory()
-        print(f"[SessionMemory] Initialized with session: {self.session_memory.session_id}")
-        
+        print(
+            f"[SessionMemory] Initialized with session: {self.session_memory.session_id}"
+        )
+
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
         if not os.path.exists(config_path):
-            config_path = os.path.join(os.path.dirname(__file__), '..', '..', config_path)
-        with open(config_path, 'r') as f:
+            config_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", config_path
+            )
+        with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-        
+
         # Auto-detect voice_output based on web host
-        web_host = config.get('app', {}).get('web_host', '0.0.0.0')
-        local_hosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
-        
+        web_host = config.get("app", {}).get("web_host", "0.0.0.0")
+        local_hosts = ["localhost", "127.0.0.1", "0.0.0.0", "::1"]
+
         # Check if host is a local address
         is_local = any(web_host.startswith(h) or web_host == h for h in local_hosts)
-        
+
         # Also check for common local IP patterns
         if not is_local and web_host:
-            if web_host.startswith('192.168.') or web_host.startswith('10.') or web_host.startswith('172.'):
+            if (
+                web_host.startswith("192.168.")
+                or web_host.startswith("10.")
+                or web_host.startswith("172.")
+            ):
                 is_local = True
-        
+
         # Set default voice_output if not explicitly set
-        if 'tts' not in config:
-            config['tts'] = {}
-        if 'voice_output' not in config['tts']:
-            config['tts']['voice_output'] = 'local' if is_local else 'web'
-            print(f"[Config] Auto-detected voice_output={config['tts']['voice_output']} (host={web_host}, is_local={is_local})")
-        
+        if "tts" not in config:
+            config["tts"] = {}
+        if "voice_output" not in config["tts"]:
+            config["tts"]["voice_output"] = "local" if is_local else "web"
+            print(
+                f"[Config] Auto-detected voice_output={config['tts']['voice_output']} (host={web_host}, is_local={is_local})"
+            )
+
         return config
-    
+
     def save_config(self):
         """Save current config to settings.yaml."""
         try:
-            config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'settings.yaml')
-            with open(config_path, 'w') as f:
-                yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            config_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", "config", "settings.yaml"
+            )
+            with open(config_path, "w") as f:
+                yaml.dump(
+                    self.config,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
             return True
         except Exception as e:
             print(f"⚠️  Failed to save config: {e}")
             return False
-    
+
     async def initialize(self):
         """Initialize MCP server and LLM client."""
         print("🚀 Initializing Talkie Web Interface...")
-        
+
         # Initialize MCP server - pass config_path, session_memory, and web_interface to ensure shared instance
-        config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'settings.yaml')
-        print(f"[Web Server] Passing session memory to MCP server: {self.session_memory.session_id}")
-        self.mcp_server = TalkieMCPServer(config_path, session_memory=self.session_memory, web_interface=self)
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "settings.yaml"
+        )
+        print(
+            f"[Web Server] Passing session memory to MCP server: {self.session_memory.session_id}"
+        )
+        self.mcp_server = TalkieMCPServer(
+            config_path, session_memory=self.session_memory, web_interface=self
+        )
         await self.mcp_server.initialize()
-        
+
         # Initialize LLM - use orchestrator if multi-LLM config exists
         if self.use_orchestrator and MULTI_LLM_AVAILABLE:
             print("[Web Server] Using Multi-LLM Orchestrator")
             llm_config = yaml.safe_load(open(self.llm_config_path))
-            
+
             # Merge API keys from settings
-            api_keys = self.config.get('api_keys', {})
-            for agent_name, agent_config in llm_config.get('llm', {}).get('agents', {}).items():
-                provider = agent_config.get('provider', '')
-                if provider == 'openai' and api_keys.get('openai'):
-                    agent_config['api_key'] = api_keys['openai']
-                elif provider == 'anthropic' and api_keys.get('anthropic'):
-                    agent_config['api_key'] = api_keys['anthropic']
-                elif provider in ['google', 'gemini'] and api_keys.get('google'):
-                    agent_config['api_key'] = api_keys['google']
-            
+            api_keys = self.config.get("api_keys", {})
+            for agent_name, agent_config in (
+                llm_config.get("llm", {}).get("agents", {}).items()
+            ):
+                provider = agent_config.get("provider", "")
+                if provider == "openai" and api_keys.get("openai"):
+                    agent_config["api_key"] = api_keys["openai"]
+                elif provider == "anthropic" and api_keys.get("anthropic"):
+                    agent_config["api_key"] = api_keys["anthropic"]
+                elif provider in ["google", "gemini"] and api_keys.get("google"):
+                    agent_config["api_key"] = api_keys["google"]
+
             # Also set API key for main/fallback
-            main_cfg = llm_config.get('llm', {}).get('main', {})
-            fallback_cfg = llm_config.get('llm', {}).get('fallback', {})
-            
+            main_cfg = llm_config.get("llm", {}).get("main", {})
+            fallback_cfg = llm_config.get("llm", {}).get("fallback", {})
+
             for cfg in [main_cfg, fallback_cfg]:
-                provider = cfg.get('provider', '')
-                if provider == 'openai' and api_keys.get('openai'):
-                    cfg['api_key'] = api_keys['openai']
-                elif provider == 'anthropic' and api_keys.get('anthropic'):
-                    cfg['api_key'] = api_keys['anthropic']
-                elif provider in ['google', 'gemini'] and api_keys.get('google'):
-                    cfg['api_key'] = api_keys['google']
-            
-            self.llm_orchestrator = LLMOrchestrator(llm_config.get('llm', {}))
+                provider = cfg.get("provider", "")
+                if provider == "openai" and api_keys.get("openai"):
+                    cfg["api_key"] = api_keys["openai"]
+                elif provider == "anthropic" and api_keys.get("anthropic"):
+                    cfg["api_key"] = api_keys["anthropic"]
+                elif provider in ["google", "gemini"] and api_keys.get("google"):
+                    cfg["api_key"] = api_keys["google"]
+
+            self.llm_orchestrator = LLMOrchestrator(llm_config.get("llm", {}))
             await self.llm_orchestrator.initialize()
-            print(f"[Web Server] Orchestrator ready. Available agents: {self.llm_orchestrator.available_agents}")
+            print(
+                f"[Web Server] Orchestrator ready. Available agents: {self.llm_orchestrator.available_agents}"
+            )
         else:
             # Use legacy single LLM client
             print("[Web Server] Using legacy LLM client")
             self.llm_client = LLMClient(config_path)
-        
+
         # Initialize file attachment tool
-        upload_config = self.config.get('upload', {})
-        upload_config['upload_dir'] = upload_config.get('upload_dir', os.path.join(tempfile.gettempdir(), 'talkie_uploads'))
+        upload_config = self.config.get("upload", {})
+        upload_config["upload_dir"] = upload_config.get(
+            "upload_dir", os.path.join(tempfile.gettempdir(), "talkie_uploads")
+        )
         self.file_attachment_tool = FileAttachmentTool(upload_config)
-        
+
         print("✅ Web interface ready!")
-        
-    async def upload_file(self, file_content: bytes, filename: str, transcribe: bool = True) -> dict:
+
+    async def upload_file(
+        self, file_content: bytes, filename: str, transcribe: bool = True
+    ) -> dict:
         """Upload and process a file, returning file info for attachment."""
         print(f"📎 Processing upload: {filename} ({len(file_content)} bytes)")
-        
+
         if not self.file_attachment_tool:
             print("   ❌ File attachment tool not initialized!")
             return {
                 "success": False,
                 "error": "File attachment tool not initialized. Please refresh the page.",
-                "filename": filename
+                "filename": filename,
             }
-        
+
         try:
             # Process the uploaded file
             result = await self.file_attachment_tool.process_upload(
                 file_content, filename, transcribe
             )
-            
+
             if result.get("success"):
                 # Store as pending attachment
                 attachment_info = {
@@ -234,18 +292,20 @@ class WebTalkieInterface:
                     "content": result.get("content", ""),
                     "saved_path": result.get("saved_path"),
                     "size": result["metadata"]["size_bytes"],
-                    "uploaded_at": datetime.now().isoformat()
+                    "uploaded_at": datetime.now().isoformat(),
                 }
                 self.pending_attachments.append(attachment_info)
-                
+
                 # Limit pending attachments to avoid memory issues
                 if len(self.pending_attachments) > 10:
                     self.pending_attachments = self.pending_attachments[-10:]
-                
+
                 # Safely get content preview
                 content = result.get("content") or ""
-                content_preview = content[:500] + "..." if len(content) > 500 else content
-                
+                content_preview = (
+                    content[:500] + "..." if len(content) > 500 else content
+                )
+
                 # Record attachment in session memory
                 attachment_memory_id = self.session_memory.record_attachment(
                     filename=filename,
@@ -254,55 +314,76 @@ class WebTalkieInterface:
                     file_path=result.get("saved_path"),
                     metadata={
                         "size_bytes": result["metadata"]["size_bytes"],
-                        "pending_attachment_id": len(self.pending_attachments) - 1
-                    }
+                        "pending_attachment_id": len(self.pending_attachments) - 1,
+                    },
                 )
-                print(f"   ✅ Upload processed: {filename} ({result['metadata']['file_type']}) [Memory ID: {attachment_memory_id}]")
+                print(
+                    f"   ✅ Upload processed: {filename} ({result['metadata']['file_type']}) [Memory ID: {attachment_memory_id}]"
+                )
                 return {
                     "success": True,
                     "filename": filename,
                     "file_type": result["metadata"]["file_type"],
                     "content_preview": content_preview,
-                    "attachment_id": len(self.pending_attachments) - 1
+                    "attachment_id": len(self.pending_attachments) - 1,
                 }
             else:
                 print(f"   ❌ Upload failed: {filename} - {result.get('error')}")
                 return {
                     "success": False,
                     "error": result.get("error", "Unknown error"),
-                    "filename": filename
+                    "filename": filename,
                 }
-                
+
         except Exception as e:
             return {
                 "success": False,
                 "error": f"Upload failed: {str(e)}",
-                "filename": filename
+                "filename": filename,
             }
-    
-    async def process_message(self, user_message: str, attachment_ids: Optional[List[int]] = None) -> dict:
+
+    async def process_message(
+        self, user_message: str, attachment_ids: Optional[List[int]] = None
+    ) -> dict:
         """Process a user message and return response."""
-        if not self.mcp_server or not self.llm_client:
+        if not self.mcp_server:
             return {
                 "type": "error",
                 "content": "System not initialized",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-        
+
+        # Check for either llm_client or orchestrator
+        if not self.llm_client and not self.use_orchestrator:
+            return {
+                "type": "error",
+                "content": "System not initialized",
+                "timestamp": datetime.now().isoformat(),
+            }
+
         try:
             # Record user message in session memory
             self.session_memory.record_message(
                 role="user",
                 content=user_message,
-                metadata={"attachment_ids": attachment_ids} if attachment_ids else {}
+                metadata={"attachment_ids": attachment_ids} if attachment_ids else {},
             )
-            
+
             # Build context messages
             messages = self._build_context_messages(user_message)
-            
+
             # Check if user is asking to read the file aloud
-            user_wants_reading = any(keyword in user_message.lower() for keyword in
-                                     ['read', 'read aloud', 'read this', 'read it', 'speak', 'narrate'])
+            user_wants_reading = any(
+                keyword in user_message.lower()
+                for keyword in [
+                    "read",
+                    "read aloud",
+                    "read this",
+                    "read it",
+                    "speak",
+                    "narrate",
+                ]
+            )
 
             # Check for URLs in user message - if user wants to read a URL, auto-use web_fetch
             urls_found = URL_PATTERN.findall(user_message)
@@ -311,14 +392,24 @@ class WebTalkieInterface:
                 # Extract first URL and check if user wants to read it
                 url = urls_found[0]
                 # Check if URL is mentioned in a reading context
-                if 'read' in user_message.lower() or 'fetch' in user_message.lower():
+                if "read" in user_message.lower() or "fetch" in user_message.lower():
                     url_to_read = url
                     print(f"[URL Detection] Found URL in reading context: {url}")
 
             # Check if user is referencing a previously uploaded file without attaching it again
-            file_reference_keywords = ['the file i uploaded', 'that file', 'the document', 'that document',
-                                       'file i just uploaded', 'uploaded file', 'the pdf', 'the txt']
-            user_references_past_file = any(keyword in user_message.lower() for keyword in file_reference_keywords)
+            file_reference_keywords = [
+                "the file i uploaded",
+                "that file",
+                "the document",
+                "that document",
+                "file i just uploaded",
+                "uploaded file",
+                "the pdf",
+                "the txt",
+            ]
+            user_references_past_file = any(
+                keyword in user_message.lower() for keyword in file_reference_keywords
+            )
 
             # If user references past file but didn't attach it, inject recent attachments info
             if user_references_past_file and not attachment_ids:
@@ -334,7 +425,9 @@ class WebTalkieInterface:
                     last_message = messages[-1]
                     if last_message["role"] == "user":
                         last_message["content"] += files_info
-                        print(f"[SessionMemory] Injected recent attachments info for reference: {[a['filename'] for a in recent_attachments]}")
+                        print(
+                            f"[SessionMemory] Injected recent attachments info for reference: {[a['filename'] for a in recent_attachments]}"
+                        )
 
             # Add attachment content to the last user message if attachments are specified
             if attachment_ids and self.pending_attachments:
@@ -342,10 +435,12 @@ class WebTalkieInterface:
                 for idx in attachment_ids:
                     if 0 <= idx < len(self.pending_attachments):
                         attachment = self.pending_attachments[idx]
-                        
+
                         # Check if user is asking to read this file
-                        is_reading_request = user_wants_reading and idx == attachment_ids[0]
-                        
+                        is_reading_request = (
+                            user_wants_reading and idx == attachment_ids[0]
+                        )
+
                         if is_reading_request:
                             # For reading requests, only show file info, not full content in chat
                             file_info = f"\n\n[File attached: {attachment['filename']} ({attachment['file_type']})]\n"
@@ -353,138 +448,158 @@ class WebTalkieInterface:
                             # Store full content for the tool but don't display it
                             attachment_content.append(file_info)
                             # Add content in a way that's only visible to LLM, not in chat display
-                            attachment['_full_content'] = attachment.get('content', '')
+                            attachment["_full_content"] = attachment.get("content", "")
                         else:
                             # For analysis/summary requests, include content normally
-                            file_info = f"\n\n--- Attached File: {attachment['filename']} ---\n"
+                            file_info = (
+                                f"\n\n--- Attached File: {attachment['filename']} ---\n"
+                            )
                             file_info += f"Type: {attachment['file_type']}\n"
                             # Use larger limit for content
                             content_limit = 40000
-                            if attachment.get('content'):
-                                file_info += f"Content:\n{attachment['content'][:content_limit]}"
-                                if len(attachment['content']) > content_limit:
+                            if attachment.get("content"):
+                                file_info += (
+                                    f"Content:\n{attachment['content'][:content_limit]}"
+                                )
+                                if len(attachment["content"]) > content_limit:
                                     file_info += f"\n[Content truncated to {content_limit} characters]"
                             attachment_content.append(file_info)
-                
+
                 if attachment_content:
                     # Append attachment content to the last user message
                     last_message = messages[-1]
                     if last_message["role"] == "user":
-                        last_message["content"] += "\n\n" + "\n".join(attachment_content)
-                        
+                        last_message["content"] += "\n\n" + "\n".join(
+                            attachment_content
+                        )
+
                         # If reading was requested, add content as a system message for LLM only
                         if user_wants_reading and self.pending_attachments:
                             for idx in attachment_ids:
                                 if 0 <= idx < len(self.pending_attachments):
                                     attachment = self.pending_attachments[idx]
-                                    if attachment.get('_full_content'):
+                                    if attachment.get("_full_content"):
                                         # Insert before last message (so LLM sees it but it's not in visible chat)
                                         # Use 50000 char limit for LLM context
                                         content_limit = 50000
-                                        full_content = attachment['_full_content'][:content_limit]
-                                        if len(attachment['_full_content']) > content_limit:
+                                        full_content = attachment["_full_content"][
+                                            :content_limit
+                                        ]
+                                        if (
+                                            len(attachment["_full_content"])
+                                            > content_limit
+                                        ):
                                             full_content += f"\n\n[Content truncated to {content_limit} characters]"
-                                            messages.insert(-1, {
-                                            "role": "system",
-                                            "content": f"Full content of {attachment['filename']}:\n{full_content}"
-                                        })
-            
+                                            messages.insert(
+                                                -1,
+                                                {
+                                                    "role": "system",
+                                                    "content": f"Full content of {attachment['filename']}:\n{full_content}",
+                                                },
+                                            )
+
             # Auto-handle URL reading - use file_reading_tool for pause/resume support
             if url_to_read:
                 print(f"[URL Auto-Read] Using file_reading_tool for URL: {url_to_read}")
-                file_reading_tool = self.mcp_server.tools.get('read_file_chunk')
+                file_reading_tool = self.mcp_server.tools.get("read_file_chunk")
                 if file_reading_tool:
                     try:
                         # Stop any existing chat TTS before starting file reading
-                        tts_tool = self.mcp_server.tools.get('speak')
+                        tts_tool = self.mcp_server.tools.get("speak")
                         if tts_tool:
                             tts_tool.stop_audio(reason="file_reading")
-                        
-                        result = await file_reading_tool.execute(url=url_to_read, action="read")
+
+                        result = await file_reading_tool.execute(
+                            url=url_to_read, action="read"
+                        )
                         print(f"[URL Auto-Read] Result: {result}")
-                        
-                        if result.get('success'):
+
+                        if result.get("success"):
                             return {
                                 "type": "assistant_message",
                                 "content": f"Started reading the webpage. You can say 'pause' to pause, 'stop' to stop.",
                                 "skip_voice": True,  # Don't speak in chat channel - file reading handles it
-                                "timestamp": datetime.now().isoformat()
+                                "timestamp": datetime.now().isoformat(),
                             }
                         else:
-                            error_msg = result.get('error', 'Unknown error')
+                            error_msg = result.get("error", "Unknown error")
                             return {
                                 "type": "assistant_message",
                                 "content": f"I couldn't access that webpage. Error: {error_msg}",
-                                "timestamp": datetime.now().isoformat()
+                                "timestamp": datetime.now().isoformat(),
                             }
                     except Exception as e:
                         print(f"[URL Auto-Read] Error: {e}")
                         import traceback
+
                         traceback.print_exc()
                         return {
                             "type": "assistant_message",
                             "content": f"I had trouble accessing that URL: {str(e)}",
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": datetime.now().isoformat(),
                         }
                 else:
                     return {
                         "type": "assistant_message",
                         "content": "File reading tool not available",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
                     }
-            
+
             # Format tools for LLM - exclude 'speak' tool as web interface handles TTS
-            tools_dict = {k: v for k, v in self.mcp_server.tools.items() if k != 'speak'}
-            
+            tools_dict = {
+                k: v for k, v in self.mcp_server.tools.items() if k != "speak"
+            }
+
             # Use orchestrator if available
             if self.use_orchestrator and self.llm_orchestrator:
                 result = await self.llm_orchestrator.process(
                     user_input=user_message,
                     tools=tools_dict,
                     conversation_history=messages[:-1] if messages else None,
-                    system_prompt=self.config.get('llm', {}).get('system_prompt', '')
+                    system_prompt=self.config.get("llm", {}).get("system_prompt", ""),
                 )
-                
-                if not result.get('success'):
+
+                if not result.get("success"):
                     return {
                         "type": "error",
-                        "content": result.get('content', 'LLM Error'),
-                        "timestamp": datetime.now().isoformat()
+                        "content": result.get("content", "LLM Error"),
+                        "timestamp": datetime.now().isoformat(),
                     }
-                
-                content = result.get('content', '')
-                
+
+                content = result.get("content", "")
+
                 # Update conversation history
                 self._add_to_history(user_message, content)
                 self.session_memory.record_message(role="assistant", content=content)
-                
+
                 return {
                     "type": "assistant_message",
                     "content": content,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 # Legacy single LLM client - run in executor to avoid blocking event loop
                 tools = self.llm_client.format_tools_for_llm(tools_dict)
-                print(f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}")
-                
+                print(
+                    f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}"
+                )
+
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
-                    None,
-                    lambda: self.llm_client.chat_completion(messages, tools=tools)
+                    None, lambda: self.llm_client.chat_completion(messages, tools=tools)
                 )
-            
+
             if "error" in response and "choices" not in response:
                 return {
                     "type": "error",
                     "content": f"LLM Error: {response['error']}",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
-            
+
             message = response["choices"][0]["message"]
             content = message.get("content", "")
             tool_calls = message.get("tool_calls", [])
-            
+
             # Handle tool calls
             if tool_calls:
                 return await self._handle_tool_calls(tool_calls, messages, user_message)
@@ -493,54 +608,74 @@ class WebTalkieInterface:
                 # This can happen if LLM generates acknowledgment but forgets to call the tool
                 if user_wants_reading and attachment_ids and self.pending_attachments:
                     # Check if LLM response indicates reading intent
-                    reading_acknowledged = any(phrase in content.lower() for phrase in 
-                                               ['read this', 'reading', 'will read', 'start reading', 
-                                                'narrate', 'speak aloud', 'read it'])
+                    reading_acknowledged = any(
+                        phrase in content.lower()
+                        for phrase in [
+                            "read this",
+                            "reading",
+                            "will read",
+                            "start reading",
+                            "narrate",
+                            "speak aloud",
+                            "read it",
+                        ]
+                    )
                     if reading_acknowledged:
                         # Auto-trigger reading with the first attachment
                         first_attachment = self.pending_attachments[attachment_ids[0]]
-                        if first_attachment.get('_full_content') or first_attachment.get('content'):
+                        if first_attachment.get(
+                            "_full_content"
+                        ) or first_attachment.get("content"):
                             # Start reading in background
-                            reading_content = first_attachment.get('_full_content') or first_attachment.get('content')
+                            reading_content = first_attachment.get(
+                                "_full_content"
+                            ) or first_attachment.get("content")
                             if reading_content:
-                                asyncio.create_task(self.read_file_aloud(
-                                    content=reading_content,
-                                    start_paragraph=1,
-                                    language="auto"
-                                ))
+                                asyncio.create_task(
+                                    self.read_file_aloud(
+                                        content=reading_content,
+                                        start_paragraph=1,
+                                        language="auto",
+                                    )
+                                )
                             # Update the content to indicate reading has started
                             content += "\n\n📖 *Reading started... Say 'stop reading' to pause.*"
-                
+
                 # Update conversation history
                 self._add_to_history(user_message, content)
-                
+
                 # Record assistant response in session memory
                 self.session_memory.record_message(
                     role="assistant",
                     content=content,
-                    metadata={"auto_reading_triggered": user_wants_reading and attachment_ids is not None}
+                    metadata={
+                        "auto_reading_triggered": user_wants_reading
+                        and attachment_ids is not None
+                    },
                 )
-                
+
                 return {
                     "type": "assistant_message",
                     "content": content,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "assistant_message",
                     "content": "I didn't understand that. Could you please rephrase?",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
-                
+
         except Exception as e:
             return {
                 "type": "error",
                 "content": f"Error processing message: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
-    async def _handle_tool_calls(self, tool_calls: list, messages: list, original_input: str) -> dict:
+
+    async def _handle_tool_calls(
+        self, tool_calls: list, messages: list, original_input: str
+    ) -> dict:
         """Execute tool calls and return final response."""
         tool_results = []
 
@@ -552,67 +687,102 @@ class WebTalkieInterface:
             tool_name = tool_call["function"]["name"]
             tool_args = json.loads(tool_call["function"]["arguments"])
 
-            print(f"[Tool Call] Executing: {tool_name}({json.dumps(tool_args)[:100]}...)")
+            print(
+                f"[Tool Call] Executing: {tool_name}({json.dumps(tool_args)[:100]}...)"
+            )
 
             try:
                 result = await self.mcp_server.call_tool(tool_name, tool_args)
                 result_text = result[0].text if result else "{}"
-                
-                tool_results.append({
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result": result_text
-                })
-                
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [tool_call]
-                })
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": result_text
-                })
-                
+
+                tool_results.append(
+                    {"tool": tool_name, "args": tool_args, "result": result_text}
+                )
+
+                messages.append(
+                    {"role": "assistant", "content": None, "tool_calls": [tool_call]}
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": result_text,
+                    }
+                )
+
             except Exception as e:
                 error_msg = json.dumps({"error": str(e)})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": error_msg
-                })
-        
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": error_msg,
+                    }
+                )
+
         # Get final response after tool execution - run in executor to avoid blocking event loop
         loop = asyncio.get_event_loop()
         final_response = await loop.run_in_executor(
-            None,
-            lambda: self.llm_client.chat_completion(messages)
+            None, lambda: self.llm_client.chat_completion(messages)
         )
-        
+
         if "choices" in final_response:
             final_content = final_response["choices"][0]["message"].get("content", "")
-            
-            # Check if reading-related tools were called or intent was expressed
-            reading_intent_phrases = ['read this', 'will read', 'start reading',
-                                      'narrate', 'speak aloud', 'read it', 'read aloud']
-            has_reading_intent = any(phrase in final_content.lower() for phrase in reading_intent_phrases)
-            # Check for reading tools
-            has_called_read_tool = any(tr["tool"] in ["read_file_aloud", "read_file_chunk"] for tr in tool_results)
-            has_fetched_attachment = any(tr["tool"] == "get_attachment_content" for tr in tool_results)
-            has_fetched_recent_attachments = any(tr["tool"] == "get_recent_attachments" for tr in tool_results)
-            has_stop_reading = any(tr["tool"] in ["stop_reading", "stop_file_reading"] for tr in tool_results)
-            has_read_file_chunk = any(tr["tool"] == "read_file_chunk" for tr in tool_results)
 
-            print(f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_fetched_recent={has_fetched_recent_attachments}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}")
-            print(f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}")
+            # Check if reading-related tools were called or intent was expressed
+            reading_intent_phrases = [
+                "read this",
+                "will read",
+                "start reading",
+                "narrate",
+                "speak aloud",
+                "read it",
+                "read aloud",
+            ]
+            has_reading_intent = any(
+                phrase in final_content.lower() for phrase in reading_intent_phrases
+            )
+            # Check for reading tools
+            has_called_read_tool = any(
+                tr["tool"] in ["read_file_aloud", "read_file_chunk"]
+                for tr in tool_results
+            )
+            has_fetched_attachment = any(
+                tr["tool"] == "get_attachment_content" for tr in tool_results
+            )
+            has_fetched_recent_attachments = any(
+                tr["tool"] == "get_recent_attachments" for tr in tool_results
+            )
+            has_stop_reading = any(
+                tr["tool"] in ["stop_reading", "stop_file_reading"]
+                for tr in tool_results
+            )
+            has_read_file_chunk = any(
+                tr["tool"] == "read_file_chunk" for tr in tool_results
+            )
+
+            print(
+                f"[Auto Read] Debug: has_reading_intent={has_reading_intent}, has_called_read_tool={has_called_read_tool}, has_fetched_attachment={has_fetched_attachment}, has_fetched_recent={has_fetched_recent_attachments}, has_stop_reading={has_stop_reading}, has_read_file_chunk={has_read_file_chunk}"
+            )
+            print(
+                f"[Auto Read] Debug: tool_results={[tr['tool'] for tr in tool_results]}"
+            )
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger
             if has_reading_intent and not has_called_read_tool and not has_stop_reading:
-                print(f"[Auto Read] LLM indicated reading intent but didn't call tool. Auto-triggering...")
+                print(
+                    f"[Auto Read] LLM indicated reading intent but didn't call tool. Auto-triggering..."
+                )
 
                 # Try to get content from attachment tool result first
-                attachment_tool_result = next((tr for tr in tool_results if tr["tool"] == "get_attachment_content"), None)
+                attachment_tool_result = next(
+                    (
+                        tr
+                        for tr in tool_results
+                        if tr["tool"] == "get_attachment_content"
+                    ),
+                    None,
+                )
                 content = None
                 filename = "the file"
 
@@ -621,7 +791,9 @@ class WebTalkieInterface:
                         result_data = json.loads(attachment_tool_result["result"])
                         if result_data.get("success") and result_data.get("content"):
                             content = result_data["content"]
-                            filename = result_data.get("attachment", {}).get("filename", "the file")
+                            filename = result_data.get("attachment", {}).get(
+                                "filename", "the file"
+                            )
                     except:
                         pass
 
@@ -629,41 +801,60 @@ class WebTalkieInterface:
                 if not content:
                     recent_attachments = self.session_memory.get_recent_attachments(1)
                     if recent_attachments:
-                        content = self.session_memory.get_attachment_content(recent_attachments[0]['id'])
-                        filename = recent_attachments[0]['filename']
+                        content = self.session_memory.get_attachment_content(
+                            recent_attachments[0]["id"]
+                        )
+                        filename = recent_attachments[0]["filename"]
 
                 if content:
-                    print(f"[Auto Read] Auto-reading: {filename} (content length: {len(content)})")
+                    print(
+                        f"[Auto Read] Auto-reading: {filename} (content length: {len(content)})"
+                    )
                     # Call read_file_chunk tool directly via MCP server
                     if self.mcp_server and "read_file_chunk" in self.mcp_server.tools:
                         tool = self.mcp_server.tools["read_file_chunk"]
                         asyncio.create_task(tool.execute())
-                        final_content += f"\n\n📖 *Reading {filename}... Say 'stop' to stop.*"
+                        final_content += (
+                            f"\n\n📖 *Reading {filename}... Say 'stop' to stop.*"
+                        )
                         has_called_read_tool = True
                 else:
                     print(f"[Auto Read] No content found to read")
 
             # If get_recent_attachments was called, auto-trigger reading of the most recent file
-            elif has_fetched_recent_attachments and not has_called_read_tool and not has_stop_reading:
-                print(f"[Auto Read] Recent attachments fetched but read not called. Auto-triggering...")
+            elif (
+                has_fetched_recent_attachments
+                and not has_called_read_tool
+                and not has_stop_reading
+            ):
+                print(
+                    f"[Auto Read] Recent attachments fetched but read not called. Auto-triggering..."
+                )
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
                 if recent_attachments:
                     attachment = recent_attachments[0]
-                    content = self.session_memory.get_attachment_content(attachment['id'])
+                    content = self.session_memory.get_attachment_content(
+                        attachment["id"]
+                    )
                     if content:
-                        print(f"[Auto Read] Auto-reading file: {attachment['filename']}")
-                        if self.mcp_server and "read_file_chunk" in self.mcp_server.tools:
+                        print(
+                            f"[Auto Read] Auto-reading file: {attachment['filename']}"
+                        )
+                        if (
+                            self.mcp_server
+                            and "read_file_chunk" in self.mcp_server.tools
+                        ):
                             tool = self.mcp_server.tools["read_file_chunk"]
                             asyncio.create_task(tool.execute())
                             final_content += f"\n\n📖 *Reading {attachment['filename']}... Say 'stop' to stop.*"
                             has_called_read_tool = True
                         else:
-                            asyncio.create_task(self.read_file_aloud(
-                                content=content,
-                                start_paragraph=1,
-                                language="auto"
-                            ))
+                            asyncio.create_task(
+                                self.read_file_aloud(
+                                    content=content, start_paragraph=1, language="auto"
+                                )
+                            )
                             final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
                             has_called_read_tool = True
                     else:
@@ -672,66 +863,84 @@ class WebTalkieInterface:
                     print(f"[Auto Read] No recent attachments found")
 
             # If LLM expressed reading intent but didn't call the tool, auto-trigger reading (fallback)
-            elif has_reading_intent and not has_called_read_tool and not has_stop_reading:
-                print(f"[Auto Read] LLM said it will read but didn't call read_file_aloud. Auto-triggering...")
+            elif (
+                has_reading_intent and not has_called_read_tool and not has_stop_reading
+            ):
+                print(
+                    f"[Auto Read] LLM said it will read but didn't call read_file_aloud. Auto-triggering..."
+                )
                 # Try to get most recent attachment and read it
                 recent_attachments = self.session_memory.get_recent_attachments(1)
                 if recent_attachments:
                     attachment = recent_attachments[0]
-                    content = self.session_memory.get_attachment_content(attachment['id'])
+                    content = self.session_memory.get_attachment_content(
+                        attachment["id"]
+                    )
                     if content:
-                        print(f"[Auto Read] Auto-reading file: {attachment['filename']}")
-                        asyncio.create_task(self.read_file_aloud(
-                            content=content,
-                            start_paragraph=1,
-                            language="auto"
-                        ))
+                        print(
+                            f"[Auto Read] Auto-reading file: {attachment['filename']}"
+                        )
+                        asyncio.create_task(
+                            self.read_file_aloud(
+                                content=content, start_paragraph=1, language="auto"
+                            )
+                        )
                         final_content += f"\n\n📖 *Now reading {attachment['filename']}... Say 'stop reading' to pause.*"
                         has_called_read_tool = True  # Mark as called for skip_voice
 
             # If LLM called the tool but didn't say anything about reading, add a note
-            if has_called_read_tool and not has_reading_intent and not has_fetched_attachment:
-                print(f"[Auto Read] Tool was called but LLM didn't acknowledge. Adding note...")
-                final_content += "\n\n📖 *Reading the file now... Say 'stop reading' to pause.*"
-            
+            if (
+                has_called_read_tool
+                and not has_reading_intent
+                and not has_fetched_attachment
+            ):
+                print(
+                    f"[Auto Read] Tool was called but LLM didn't acknowledge. Adding note..."
+                )
+                final_content += (
+                    "\n\n📖 *Reading the file now... Say 'stop reading' to pause.*"
+                )
+
             self._add_to_history(original_input, final_content, tool_results)
-            
+
             # Record assistant response with tool results in session memory
             self.session_memory.record_message(
                 role="assistant",
                 content=final_content,
                 metadata={
                     "tool_calls": [tr["tool"] for tr in tool_results],
-                    "tools_used_count": len(tool_results)
-                }
+                    "tools_used_count": len(tool_results),
+                },
             )
-            
+
             # Determine if we should skip auto-speaking the response
             # Skip when read_file_aloud was called because the file content will be spoken instead
             skip_voice = has_called_read_tool
-            print(f"[Assistant Response] skip_voice={skip_voice}, has_called_read_tool={has_called_read_tool}")
+            print(
+                f"[Assistant Response] skip_voice={skip_voice}, has_called_read_tool={has_called_read_tool}"
+            )
 
             return {
                 "type": "assistant_message",
                 "content": final_content,
                 "tool_calls": tool_results,
                 "skip_voice": skip_voice,  # Tell frontend not to auto-speak this
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         else:
             return {
                 "type": "error",
                 "content": "Failed to get final response",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def _build_context_messages(self, user_input: str) -> list:
         """Build context messages with conversation history."""
         messages = []
-        
+
         # Add system prompt with memory capabilities
-        system_prompt = self.config.get('llm', {}).get('system_prompt', '')
-        
+        system_prompt = self.config.get("llm", {}).get("system_prompt", "")
+
         # Add memory and file reading information
         memory_info = """
 MEMORY & FILE READING:
@@ -763,162 +972,244 @@ CRITICAL RULES:
 - If user says "stop", call stop_file_reading tool
 """
 
-        full_system_prompt = f"{system_prompt}\n\n{memory_info}" if system_prompt else memory_info
-        
-        messages.append({
-            "role": "system",
-            "content": full_system_prompt
-        })
-        
+        full_system_prompt = (
+            f"{system_prompt}\n\n{memory_info}" if system_prompt else memory_info
+        )
+
+        messages.append({"role": "system", "content": full_system_prompt})
+
         # Add recent history (last 10 exchanges)
-        recent_history = self.conversation_history[-20:] if len(self.conversation_history) <= 20 else self.conversation_history[-20:]
+        recent_history = (
+            self.conversation_history[-20:]
+            if len(self.conversation_history) <= 20
+            else self.conversation_history[-20:]
+        )
         messages.extend(recent_history)
-        
+
         # Add current user input
         messages.append({"role": "user", "content": user_input})
-        
+
         return messages
-    
-    def _add_to_history(self, user_input: str, assistant_response: str, tool_results=None):
+
+    def _add_to_history(
+        self, user_input: str, assistant_response: str, tool_results=None
+    ):
         """Add exchange to conversation history."""
         import time
-        
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_input,
-            "timestamp": time.time()
-        })
-        
+
+        self.conversation_history.append(
+            {"role": "user", "content": user_input, "timestamp": time.time()}
+        )
+
         assistant_msg = {
             "role": "assistant",
             "content": assistant_response,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
         if tool_results:
             assistant_msg["tool_results"] = tool_results
-        
+
         self.conversation_history.append(assistant_msg)
-        
+
         # Trim history if too long
         if len(self.conversation_history) > 50:
             self.conversation_history = self.conversation_history[-40:]
-    
+
     def get_system_status(self) -> dict:
         """Get current system status."""
         # Get actually running LLM model
         running_model = self.model_manager.get_running_model()
-        
+
         if running_model and running_model.get("model_path"):
             # Use model_name if available, otherwise extract from path
             if running_model.get("model_name"):
                 llm_model = running_model["model_name"]
             else:
                 model_path = running_model["model_path"]
-                llm_model = os.path.basename(model_path) if "/" in model_path else model_path
+                llm_model = (
+                    os.path.basename(model_path) if "/" in model_path else model_path
+                )
             is_running = True
         else:
             llm_model = "Not running"
             is_running = False
-        
+
         # Get voice daemon status
         voice_daemon_status = {}
         if self.mcp_server and self.mcp_server.voice_daemon:
             voice_daemon_status = self.mcp_server.voice_daemon.get_status()
-        
+
         return {
             "type": "system_status",
             "mcp_server_ready": self.mcp_server is not None,
-            "llm_client_ready": self.llm_client is not None,
+            "llm_client_ready": self.llm_client is not None
+            or (self.use_orchestrator and self.llm_orchestrator is not None),
             "llm_running": is_running,
-            "available_tools": list(self.mcp_server.tools.keys()) if self.mcp_server else [],
+            "available_tools": list(self.mcp_server.tools.keys())
+            if self.mcp_server
+            else [],
             "conversation_count": len(self.conversation_history) // 2,
             "config": {
-                "tts_engine": self.config.get('tts', {}).get('engine', 'unknown'),
-                "tts_model": self.config.get('tts', {}).get('coqui_model', 'unknown'),
-                "voice_output": self.config.get('tts', {}).get('voice_output', 'local'),
+                "tts_engine": self.config.get("tts", {}).get("engine", "unknown"),
+                "tts_model": self.config.get("tts", {}).get("coqui_model", "unknown"),
+                "voice_output": self.config.get("tts", {}).get("voice_output", "local"),
                 "llm_model": llm_model,
-                "stt_model": self.config.get('stt', {}).get('model', 'unknown'),
+                "stt_model": self.config.get("stt", {}).get("model", "unknown"),
             },
             "voice_daemon": voice_daemon_status,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     def get_available_models(self) -> dict:
         """Get list of available TTS and LLM models."""
         # TTS Engines
         tts_engines = [
-            {"id": "edge_tts", "name": "Edge TTS (Microsoft)", "type": "online", "description": "High quality, fast, requires internet"},
-            {"id": "qwen_tts", "name": "Qwen3 TTS (Local)", "type": "local", "description": "CustomVoice and VoiceDesign modes"},
-            {"id": "coqui", "name": "Coqui TTS (Local)", "type": "local", "description": "Offline, customizable voices, large models"},
-            {"id": "pyttsx3", "name": "pyttsx3 (Fallback)", "type": "local", "description": "Basic offline TTS"},
+            {
+                "id": "edge_tts",
+                "name": "Edge TTS (Microsoft)",
+                "type": "online",
+                "description": "High quality, fast, requires internet",
+            },
+            {
+                "id": "qwen_tts",
+                "name": "Qwen3 TTS (Local)",
+                "type": "local",
+                "description": "CustomVoice and VoiceDesign modes",
+            },
+            {
+                "id": "coqui",
+                "name": "Coqui TTS (Local)",
+                "type": "local",
+                "description": "Offline, customizable voices, large models",
+            },
+            {
+                "id": "pyttsx3",
+                "name": "pyttsx3 (Fallback)",
+                "type": "local",
+                "description": "Basic offline TTS",
+            },
         ]
-        
+
         # Coqui TTS Models
         tts_models = [
-            {"id": "tts_models/en/ljspeech/tacotron2-DDC", "name": "English (Tacotron2)", "language": "en", "size": "113MB"},
-            {"id": "tts_models/zh-CN/baker/tacotron2-DDC-GST", "name": "Chinese (Baker)", "language": "zh", "size": "686MB"},
-            {"id": "tts_models/multilingual/multi-dataset/xtts_v2", "name": "XTTS-v2 (17 languages)", "language": "multilingual", "size": "1.5GB", "requires_license": True},
+            {
+                "id": "tts_models/en/ljspeech/tacotron2-DDC",
+                "name": "English (Tacotron2)",
+                "language": "en",
+                "size": "113MB",
+            },
+            {
+                "id": "tts_models/zh-CN/baker/tacotron2-DDC-GST",
+                "name": "Chinese (Baker)",
+                "language": "zh",
+                "size": "686MB",
+            },
+            {
+                "id": "tts_models/multilingual/multi-dataset/xtts_v2",
+                "name": "XTTS-v2 (17 languages)",
+                "language": "multilingual",
+                "size": "1.5GB",
+                "requires_license": True,
+            },
         ]
-        
+
         # Get LLM models from model manager
         llm_models = self.model_manager.scan_available_models()
         running_model = self.model_manager.get_running_model()
-        
+
         # Get TTS info
         tts_speakers = []
         current_speaker = "default"
         current_engine = "unknown"
         edge_voices = []
         current_edge_voice = "default"
-        
-        if self.mcp_server and 'speak' in self.mcp_server.tools:
-            tts_tool = self.mcp_server.tools['speak']
+
+        if self.mcp_server and "speak" in self.mcp_server.tools:
+            tts_tool = self.mcp_server.tools["speak"]
             current_engine = tts_tool.get_current_engine()
-            
+
             # Get speakers/voices based on current engine
             if current_engine == "edge_tts":
                 # For Edge TTS, get voices from Edge TTS tool
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     edge_voices = tts_tool.edge_tts_tool.get_available_voices()
                     current_edge_voice = tts_tool.edge_tts_tool.get_current_voice()
                     # Also populate tts_speakers with Edge voices for compatibility
-                    tts_speakers = [{"id": v["id"], "name": v["name"], "gender": v["gender"], "locale": v["locale"], "type": "edge"} for v in edge_voices]
+                    tts_speakers = [
+                        {
+                            "id": v["id"],
+                            "name": v["name"],
+                            "gender": v["gender"],
+                            "locale": v["locale"],
+                            "type": "edge",
+                        }
+                        for v in edge_voices
+                    ]
                 else:
                     # Edge TTS not initialized yet, return default voices from class
                     try:
                         from tools.edge_tts_tool import EdgeTTSTool
+
                         edge_voices = EdgeTTSTool.AVAILABLE_VOICES
-                        current_edge_voice = self.config.get('tts', {}).get('edge_voice', 'en-US-AriaNeural')
-                        tts_speakers = [{"id": v["id"], "name": v["name"], "gender": v["gender"], "locale": v["locale"], "type": "edge"} for v in edge_voices]
+                        current_edge_voice = self.config.get("tts", {}).get(
+                            "edge_voice", "en-US-AriaNeural"
+                        )
+                        tts_speakers = [
+                            {
+                                "id": v["id"],
+                                "name": v["name"],
+                                "gender": v["gender"],
+                                "locale": v["locale"],
+                                "type": "edge",
+                            }
+                            for v in edge_voices
+                        ]
                     except Exception as e:
                         print(f"⚠️  Failed to load Edge TTS voices: {e}")
             else:
                 # For Coqui/pyttsx3, get speakers
                 tts_speakers = tts_tool.get_available_speakers()
                 current_speaker = tts_tool.get_current_speaker()
-        
+
         return {
             "type": "available_models",
             "tts_engines": tts_engines,
             "current_tts_engine": current_engine,
             "tts_models": tts_models,
-            "current_tts_model": self.config.get('tts', {}).get('coqui_model', 'unknown'),
+            "current_tts_model": self.config.get("tts", {}).get(
+                "coqui_model", "unknown"
+            ),
             "tts_speakers": tts_speakers,
             "current_tts_speaker": current_speaker,
             "edge_voices": edge_voices,
             "current_edge_voice": current_edge_voice,
             "llm_models": llm_models,
-            "current_llm_model": running_model.get("model_path") if running_model else None,
-            "current_llm_model_name": running_model.get("model_name") if running_model else None,
-            "llm_server_running": running_model is not None,
-            "timestamp": datetime.now().isoformat()
+            "llm_providers": [
+                "vllm",
+                "ollama",
+                "openai",
+                "anthropic",
+                "google",
+                "lmstudio",
+                "llamacpp",
+            ],
+            "current_llm_model": running_model.get("model_path")
+            if running_model
+            else None,
+            "current_llm_model_name": running_model.get("model_name")
+            if running_model
+            else None,
+            "llm_server_running": running_model is not None
+            or (self.use_orchestrator and self.llm_orchestrator is not None),
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     def get_llm_status(self) -> dict:
         """Get LLM server status."""
         # If using orchestrator, return its status
         if self.use_orchestrator and self.llm_orchestrator:
             import asyncio
+
             try:
                 status = asyncio.get_event_loop().run_until_complete(
                     self.llm_orchestrator.get_status()
@@ -927,20 +1218,20 @@ CRITICAL RULES:
                     "type": "llm_status",
                     "using_orchestrator": True,
                     "orchestrator_status": status,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             except Exception as e:
                 return {
                     "type": "llm_status",
                     "using_orchestrator": True,
                     "error": str(e),
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
-        
+
         # Legacy: return llama.cpp server status
         running_model = self.model_manager.get_running_model()
         available_models = self.model_manager.scan_available_models()
-        
+
         return {
             "type": "llm_status",
             "using_orchestrator": False,
@@ -948,73 +1239,110 @@ CRITICAL RULES:
             "current_model": running_model.get("model_path") if running_model else None,
             "pid": running_model.get("pid") if running_model else None,
             "available_models": [m["id"] for m in available_models if m.get("exists")],
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     async def switch_llm_model(self, model_id: str) -> dict:
         """Switch LLM model by restarting llama-server."""
         try:
             result = self.model_manager.switch_model(model_id)
-            
+
             if result["success"]:
                 # Reinitialize LLM client to connect to new server
-                config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'settings.yaml')
+                config_path = os.path.join(
+                    os.path.dirname(__file__), "..", "..", "config", "settings.yaml"
+                )
                 self.llm_client = LLMClient(config_path)
-            
+
             return {
                 "type": "llm_model_switched",
                 "success": result["success"],
                 "message": result["message"],
                 "model_id": model_id if result["success"] else None,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to switch LLM model: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
+    async def switch_llm_provider(self, provider: str) -> dict:
+        """Switch LLM provider by updating config and restarting."""
+        try:
+            # Update the llm_config.yaml
+            import yaml
+
+            config_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", "config", "llm_config.yaml"
+            )
+
+            with open(config_path, "r") as f:
+                llm_config = yaml.safe_load(f)
+
+            llm_config["llm"]["main"]["provider"] = provider
+
+            # Save config
+            with open(config_path, "w") as f:
+                yaml.dump(llm_config, f, default_flow_style=False)
+
+            return {
+                "type": "llm_provider_switched",
+                "success": True,
+                "message": f"Switched to {provider}. Please restart the server.",
+                "provider": provider,
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            return {
+                "type": "error",
+                "success": False,
+                "message": f"Failed to switch LLM provider: {str(e)}",
+                "timestamp": datetime.now().isoformat(),
+            }
+
     async def switch_tts_model(self, model_id: str) -> dict:
         """Switch TTS model."""
         try:
             # Update config
-            self.config['tts']['coqui_model'] = model_id
-            
+            self.config["tts"]["coqui_model"] = model_id
+
             # Reinitialize TTS tool
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
                 from tools.tts_tool import TTSTool
-                self.mcp_server.tools['speak'] = TTSTool(self.config)
-                await self.mcp_server.tools['speak'].initialize()
-            
+
+                self.mcp_server.tools["speak"] = TTSTool(self.config)
+                await self.mcp_server.tools["speak"].initialize()
+
             return {
                 "type": "model_switched",
                 "success": True,
                 "message": f"TTS model switched to {model_id}",
                 "new_model": model_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to switch model: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def switch_tts_engine(self, engine_id: str) -> dict:
         """Switch TTS engine (edge_tts, coqui, pyttsx3)."""
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
                 result = tts_tool.switch_engine(engine_id)
 
                 if result.get("success"):
                     actual_engine = result.get("engine", engine_id)
 
                     # Update config with the actual engine being used
-                    self.config['tts']['engine'] = actual_engine
+                    self.config["tts"]["engine"] = actual_engine
 
                     # Save config to file
                     self.save_config()
@@ -1030,30 +1358,30 @@ CRITICAL RULES:
                         "message": message,
                         "new_engine": actual_engine,
                         "requested_engine": engine_id,
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
                     }
                 else:
                     return {
                         "type": "error",
                         "success": False,
                         "message": f"Failed to switch TTS engine: {result.get('error', engine_id)}",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
                     }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to switch TTS engine: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def set_voice_output_mode(self, mode: str) -> dict:
         """Set voice output mode (local or web)."""
         try:
@@ -1062,87 +1390,91 @@ CRITICAL RULES:
                     "type": "voice_output_mode",
                     "success": False,
                     "message": f"Invalid mode: {mode}. Use 'local' or 'web'",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
-            
+
             # Update config
-            self.config['tts']['voice_output'] = mode
-            
+            self.config["tts"]["voice_output"] = mode
+
             # Save config
             self.save_config()
-            
+
             # Also update the edge_tts_tool if it exists
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     tts_tool.edge_tts_tool.voice_output = mode
-            
+
             # Also update file_reading_tool config
-            if self.mcp_server and 'read_file_chunk' in self.mcp_server.tools:
-                file_reading_tool = self.mcp_server.tools['read_file_chunk']
-                if hasattr(file_reading_tool, 'config') and file_reading_tool.config:
-                    file_reading_tool.config.setdefault('tts', {})['voice_output'] = mode
-                    print(f"[WebServer] Updated file_reading_tool config: voice_output={mode}")
-            
+            if self.mcp_server and "read_file_chunk" in self.mcp_server.tools:
+                file_reading_tool = self.mcp_server.tools["read_file_chunk"]
+                if hasattr(file_reading_tool, "config") and file_reading_tool.config:
+                    file_reading_tool.config.setdefault("tts", {})["voice_output"] = (
+                        mode
+                    )
+                    print(
+                        f"[WebServer] Updated file_reading_tool config: voice_output={mode}"
+                    )
+
             return {
                 "type": "voice_output_mode",
                 "success": True,
                 "message": f"Voice output mode set to {mode}",
                 "mode": mode,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to set voice output mode: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def switch_edge_voice(self, voice_id: str) -> dict:
         """Switch Edge TTS voice."""
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     success = tts_tool.edge_tts_tool.set_voice(voice_id)
-                    
+
                     if success:
                         # Update config
-                        self.config['tts']['edge_voice'] = voice_id
-                        
+                        self.config["tts"]["edge_voice"] = voice_id
+
                         # Save config to file
                         self.save_config()
-                        
+
                         return {
                             "type": "edge_voice_switched",
                             "success": True,
                             "message": f"Edge TTS voice switched to {voice_id}",
                             "new_voice": voice_id,
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": datetime.now().isoformat(),
                         }
-                
+
                 return {
                     "type": "error",
                     "success": False,
                     "message": "Edge TTS not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to switch Edge voice: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def get_tts_speakers(self) -> dict:
         """Get available TTS speakers/personas."""
         speakers = []
@@ -1150,27 +1482,30 @@ CRITICAL RULES:
         current_engine = "unknown"
         edge_voices = []
         current_edge_voice = "default"
-        
-        if self.mcp_server and 'speak' in self.mcp_server.tools:
-            tts_tool = self.mcp_server.tools['speak']
+
+        if self.mcp_server and "speak" in self.mcp_server.tools:
+            tts_tool = self.mcp_server.tools["speak"]
             current_engine = tts_tool.get_current_engine()
             speakers = tts_tool.get_available_speakers()
             current_speaker = tts_tool.get_current_speaker()
-            
+
             if current_engine == "edge_tts":
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     edge_voices = tts_tool.edge_tts_tool.get_available_voices()
                     current_edge_voice = tts_tool.edge_tts_tool.get_current_voice()
                 else:
                     try:
                         from tools.edge_tts_tool import EdgeTTSTool
+
                         edge_voices = EdgeTTSTool.AVAILABLE_VOICES
-                        current_edge_voice = self.config.get('tts', {}).get('edge_voice', 'en-US-AriaNeural')
+                        current_edge_voice = self.config.get("tts", {}).get(
+                            "edge_voice", "en-US-AriaNeural"
+                        )
                     except Exception as e:
                         print(f"⚠️  Failed to load Edge TTS voices: {e}")
-        
+
         qwen_tts_info = self.get_qwen_tts_info()
-        
+
         return {
             "type": "tts_speakers",
             "speakers": speakers,
@@ -1180,551 +1515,586 @@ CRITICAL RULES:
             "current_edge_voice": current_edge_voice,
             "qwen_tts": qwen_tts_info,
             "count": len(speakers),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     async def switch_tts_speaker(self, speaker_id: str) -> dict:
         """Switch TTS speaker/persona."""
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
                 success = tts_tool.set_speaker(speaker_id)
-                
+
                 if success:
                     # Save config to file (for Coqui TTS, speaker is stored in config)
                     self.save_config()
-                    
+
                     return {
                         "type": "speaker_switched",
                         "success": True,
                         "message": f"TTS speaker switched to {speaker_id}",
                         "new_speaker": speaker_id,
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
                     }
                 else:
                     return {
                         "type": "error",
                         "success": False,
                         "message": f"Failed to switch speaker: {speaker_id}",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
                     }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to switch speaker: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def get_qwen_tts_info(self) -> dict:
         """Get Qwen TTS configuration info."""
-        qwen_config = self.config.get('tts', {}).get('qwen_tts', {})
-        
+        qwen_config = self.config.get("tts", {}).get("qwen_tts", {})
+
         try:
             from tools.qwen_tts_tool import QwenTTSTool
+
             speakers = QwenTTSTool.CUSTOM_VOICE_SPEAKERS
             languages = QwenTTSTool.SUPPORTED_LANGUAGES
             model_types = [
-                {"id": "custom_voice_0.6b", "name": "Qwen3-TTS 0.6B CustomVoice", "description": "Faster, smaller model with predefined speakers"},
-                {"id": "custom_voice_1.7b", "name": "Qwen3-TTS 1.7B CustomVoice", "description": "Higher quality model with predefined speakers"},
-                {"id": "voice_design_1.7b", "name": "Qwen3-TTS 1.7B VoiceDesign", "description": "Design voices using natural language descriptions"},
+                {
+                    "id": "custom_voice_0.6b",
+                    "name": "Qwen3-TTS 0.6B CustomVoice",
+                    "description": "Faster, smaller model with predefined speakers",
+                },
+                {
+                    "id": "custom_voice_1.7b",
+                    "name": "Qwen3-TTS 1.7B CustomVoice",
+                    "description": "Higher quality model with predefined speakers",
+                },
+                {
+                    "id": "voice_design_1.7b",
+                    "name": "Qwen3-TTS 1.7B VoiceDesign",
+                    "description": "Design voices using natural language descriptions",
+                },
             ]
         except Exception as e:
             print(f"[WebServer] Error loading Qwen TTS info: {e}")
             speakers = []
             languages = []
             model_types = []
-        
+
         return {
             "type": "qwen_tts_info",
-            "enabled": qwen_config.get('enabled', True),
-            "model_type": qwen_config.get('model_type', 'custom_voice_0.6b'),
-            "speaker": qwen_config.get('speaker', 'Vivian'),
-            "language": qwen_config.get('language', 'Auto'),
-            "instruct": qwen_config.get('instruct', ''),
-            "device": qwen_config.get('device', 'cuda:0'),
+            "enabled": qwen_config.get("enabled", True),
+            "model_type": qwen_config.get("model_type", "custom_voice_0.6b"),
+            "speaker": qwen_config.get("speaker", "Vivian"),
+            "language": qwen_config.get("language", "Auto"),
+            "instruct": qwen_config.get("instruct", ""),
+            "device": qwen_config.get("device", "cuda:0"),
             "speakers": speakers,
             "languages": languages,
             "model_types": model_types,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     def set_qwen_tts_model_type(self, model_type: str) -> dict:
         """Set Qwen TTS model type."""
         try:
-            if 'qwen_tts' not in self.config['tts']:
-                self.config['tts']['qwen_tts'] = {}
-            
-            self.config['tts']['qwen_tts']['model_type'] = model_type
+            if "qwen_tts" not in self.config["tts"]:
+                self.config["tts"]["qwen_tts"] = {}
+
+            self.config["tts"]["qwen_tts"]["model_type"] = model_type
             self.save_config()
-            
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "qwen_tts_tool") and tts_tool.qwen_tts_tool:
                     tts_tool.qwen_tts_tool.set_model_type(model_type)
-            
+
             return {
                 "type": "qwen_tts_model_type_set",
                 "success": True,
                 "message": f"Qwen TTS model type set to {model_type}",
                 "model_type": model_type,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to set Qwen TTS model type: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def set_qwen_tts_speaker(self, speaker: str) -> dict:
         """Set Qwen TTS speaker for CustomVoice models."""
         try:
-            if 'qwen_tts' not in self.config['tts']:
-                self.config['tts']['qwen_tts'] = {}
-            
-            self.config['tts']['qwen_tts']['speaker'] = speaker
+            if "qwen_tts" not in self.config["tts"]:
+                self.config["tts"]["qwen_tts"] = {}
+
+            self.config["tts"]["qwen_tts"]["speaker"] = speaker
             self.save_config()
-            
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "qwen_tts_tool") and tts_tool.qwen_tts_tool:
                     tts_tool.qwen_tts_tool.set_speaker(speaker)
-            
+
             return {
                 "type": "qwen_tts_speaker_set",
                 "success": True,
                 "message": f"Qwen TTS speaker set to {speaker}",
                 "speaker": speaker,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to set Qwen TTS speaker: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def set_qwen_tts_language(self, language: str) -> dict:
         """Set Qwen TTS language."""
         try:
-            if 'qwen_tts' not in self.config['tts']:
-                self.config['tts']['qwen_tts'] = {}
-            
-            self.config['tts']['qwen_tts']['language'] = language
+            if "qwen_tts" not in self.config["tts"]:
+                self.config["tts"]["qwen_tts"] = {}
+
+            self.config["tts"]["qwen_tts"]["language"] = language
             self.save_config()
-            
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "qwen_tts_tool") and tts_tool.qwen_tts_tool:
                     tts_tool.qwen_tts_tool.set_language(language)
-            
+
             return {
                 "type": "qwen_tts_language_set",
                 "success": True,
                 "message": f"Qwen TTS language set to {language}",
                 "language": language,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to set Qwen TTS language: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def set_qwen_tts_instruct(self, instruct: str) -> dict:
         """Set Qwen TTS instruction for voice control."""
         try:
-            if 'qwen_tts' not in self.config['tts']:
-                self.config['tts']['qwen_tts'] = {}
-            
-            self.config['tts']['qwen_tts']['instruct'] = instruct
+            if "qwen_tts" not in self.config["tts"]:
+                self.config["tts"]["qwen_tts"] = {}
+
+            self.config["tts"]["qwen_tts"]["instruct"] = instruct
             self.save_config()
-            
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'qwen_tts_tool') and tts_tool.qwen_tts_tool:
+
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "qwen_tts_tool") and tts_tool.qwen_tts_tool:
                     tts_tool.qwen_tts_tool.set_instruct(instruct)
-            
+
             return {
                 "type": "qwen_tts_instruct_set",
                 "success": True,
                 "message": "Qwen TTS instruction updated",
                 "instruct": instruct[:100] + "..." if len(instruct) > 100 else instruct,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to set Qwen TTS instruction: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def test_tts_speaker(self, speaker_id: str = None) -> dict:
         """Test TTS with current or specified speaker."""
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
                 # Test message
                 test_text = "Hello! This is a test of the text-to-speech system."
-                
+
                 # Use specified speaker or current
-                result = await self.mcp_server.tools['speak'].execute(
-                    text=test_text,
-                    speaker_id=speaker_id,
-                    audio_type="test"
+                result = await self.mcp_server.tools["speak"].execute(
+                    text=test_text, speaker_id=speaker_id, audio_type="test"
                 )
-                
+
                 # Check if voice_output is "web" - broadcast audio to clients
-                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
-                if voice_output == "web" and result.get('success'):
-                    audio_file = result.get('audio_file') or result.get('output_file')
+                voice_output = self.config.get("tts", {}).get("voice_output", "local")
+                if voice_output == "web" and result.get("success"):
+                    audio_file = result.get("audio_file") or result.get("output_file")
                     if audio_file:
-                        await self.manager.broadcast_audio(audio_file, audio_type="test")
-                
+                        await self.manager.broadcast_audio(
+                            audio_file, audio_type="test"
+                        )
+
                 return {
                     "type": "tts_test_result",
-                    "success": result.get('success', False),
-                    "message": "TTS test completed" if result.get('success') else "TTS test failed",
+                    "success": result.get("success", False),
+                    "message": "TTS test completed"
+                    if result.get("success")
+                    else "TTS test failed",
                     "speaker": speaker_id or "default",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"TTS test failed: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
-    async def demo_tts_speaker(self, speaker_id: str = None, demo_text: str = None) -> dict:
+
+    async def demo_tts_speaker(
+        self, speaker_id: str = None, demo_text: str = None
+    ) -> dict:
         """Demo TTS with custom text for the selected speaker."""
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
                 # Use provided text or default greeting
                 text = demo_text or f"Hello, this is the selected voice"
-                
+
                 # Use specified speaker
-                result = await self.mcp_server.tools['speak'].execute(
-                    text=text,
-                    speaker_id=speaker_id,
-                    audio_type="demo"
+                result = await self.mcp_server.tools["speak"].execute(
+                    text=text, speaker_id=speaker_id, audio_type="demo"
                 )
-                
+
                 # Check if voice_output is "web" - broadcast audio to clients
-                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
-                if voice_output == "web" and result.get('success'):
-                    audio_file = result.get('audio_file') or result.get('output_file')
+                voice_output = self.config.get("tts", {}).get("voice_output", "local")
+                if voice_output == "web" and result.get("success"):
+                    audio_file = result.get("audio_file") or result.get("output_file")
                     if audio_file:
-                        await self.manager.broadcast_audio(audio_file, audio_type="demo")
-                
+                        await self.manager.broadcast_audio(
+                            audio_file, audio_type="demo"
+                        )
+
                 return {
                     "type": "tts_demo_result",
-                    "success": result.get('success', False),
-                    "message": "Voice demo played" if result.get('success') else "Voice demo failed",
+                    "success": result.get("success", False),
+                    "message": "Voice demo played"
+                    if result.get("success")
+                    else "Voice demo failed",
                     "speaker": speaker_id or "default",
                     "text": text,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Voice demo failed: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def speak_assistant_response(self, text: str) -> dict:
         """Speak assistant response using TTS with current speaker."""
         import re
-        
+
         try:
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
+            if self.mcp_server and "speak" in self.mcp_server.tools:
                 # Get current speaker from config
-                tts_tool = self.mcp_server.tools['speak']
+                tts_tool = self.mcp_server.tools["speak"]
                 current_speaker = tts_tool.get_current_speaker()
-                
+
                 # Stop any currently playing audio before starting new (defensive stop)
-                if hasattr(tts_tool, 'stop_audio'):
+                if hasattr(tts_tool, "stop_audio"):
                     try:
                         tts_tool.stop_audio(reason="chat")
                     except Exception as e:
                         print(f"[speak_assistant_response] Error stopping audio: {e}")
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     try:
                         tts_tool.edge_tts_tool.stop_audio(reason="chat")
                     except Exception as e:
-                        print(f"[speak_assistant_response] Error stopping edge_tts: {e}")
-                
+                        print(
+                            f"[speak_assistant_response] Error stopping edge_tts: {e}"
+                        )
+
                 # Strip markdown formatting (bold, italic, etc.) for clean TTS output
                 # Remove **bold** markers
-                speak_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-                # Remove *italic* markers  
-                speak_text = re.sub(r'\*([^*]+)\*', r'\1', speak_text)
+                speak_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+                # Remove *italic* markers
+                speak_text = re.sub(r"\*([^*]+)\*", r"\1", speak_text)
                 # Remove _italic_ markers
-                speak_text = re.sub(r'_([^_]+)_', r'\1', speak_text)
+                speak_text = re.sub(r"_([^_]+)_", r"\1", speak_text)
                 # Remove # headers
-                speak_text = re.sub(r'^#+\s*', '', speak_text, flags=re.MULTILINE)
+                speak_text = re.sub(r"^#+\s*", "", speak_text, flags=re.MULTILINE)
                 # Remove bullet points like - or * at start of lines
-                speak_text = re.sub(r'^[\-\*]\s+', '', speak_text, flags=re.MULTILINE)
+                speak_text = re.sub(r"^[\-\*]\s+", "", speak_text, flags=re.MULTILINE)
                 # Clean up extra whitespace
-                speak_text = re.sub(r'\n{3,}', '\n\n', speak_text)
-                
+                speak_text = re.sub(r"\n{3,}", "\n\n", speak_text)
+
                 # Strip any leading whitespace or non-printable characters
                 speak_text = speak_text.lstrip()
-                
+
                 # Truncate very long text for TTS (use large limit to allow full responses)
                 max_chars = 10000
-                speak_text = speak_text[:max_chars] if len(speak_text) > max_chars else speak_text
-                
-                print(f"[TTS] Speaking cleaned text: {speak_text[:80]}...")
-                
-                # Set audio type to chat before executing
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
-                    tts_tool.edge_tts_tool.set_audio_type("chat")
-                
-                result = await tts_tool.execute(
-                    text=speak_text,
-                    speaker_id=current_speaker,
-                    audio_type="chat"
+                speak_text = (
+                    speak_text[:max_chars]
+                    if len(speak_text) > max_chars
+                    else speak_text
                 )
-                
+
+                print(f"[TTS] Speaking cleaned text: {speak_text[:80]}...")
+
+                # Set audio type to chat before executing
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
+                    tts_tool.edge_tts_tool.set_audio_type("chat")
+
+                result = await tts_tool.execute(
+                    text=speak_text, speaker_id=current_speaker, audio_type="chat"
+                )
+
                 # Check if voice_output is "web" - broadcast audio to clients
-                voice_output = self.config.get('tts', {}).get('voice_output', 'local')
-                if voice_output == "web" and result.get('success'):
-                    audio_file = result.get('audio_file') or result.get('output_file')
+                voice_output = self.config.get("tts", {}).get("voice_output", "local")
+                if voice_output == "web" and result.get("success"):
+                    audio_file = result.get("audio_file") or result.get("output_file")
                     if audio_file:
-                        await self.manager.broadcast_audio(audio_file, audio_type="chat")
-                
+                        await self.manager.broadcast_audio(
+                            audio_file, audio_type="chat"
+                        )
+
                 return {
                     "type": "tts_spoken",
-                    "success": result.get('success', False),
+                    "success": result.get("success", False),
                     "speaker": current_speaker,
                     "characters": len(speak_text),
                     "voice_output": voice_output,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "TTS tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"TTS failed: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def stop_chat_voice(self) -> dict:
         """Stop any ongoing chat TTS voice (not file reading).
         Called when user sends a new message to interrupt current chat response."""
         try:
             # Stop via TTS tool - pass reason="chat" to distinguish from file reading
-            if self.mcp_server and 'speak' in self.mcp_server.tools:
-                tts_tool = self.mcp_server.tools['speak']
-                if hasattr(tts_tool, 'stop_audio'):
+            if self.mcp_server and "speak" in self.mcp_server.tools:
+                tts_tool = self.mcp_server.tools["speak"]
+                if hasattr(tts_tool, "stop_audio"):
                     try:
                         tts_tool.stop_audio(reason="chat")
                     except Exception as e:
                         print(f"[stop_chat_voice] Error stopping TTS tool: {e}")
-                
+
                 # Also try to stop edge_tts_tool directly if it exists
-                if hasattr(tts_tool, 'edge_tts_tool') and tts_tool.edge_tts_tool:
+                if hasattr(tts_tool, "edge_tts_tool") and tts_tool.edge_tts_tool:
                     try:
                         tts_tool.edge_tts_tool.stop_audio(reason="chat")
                         # Reset first message flag for new chat
-                        if hasattr(tts_tool.edge_tts_tool, 'reset_first_message_flag'):
+                        if hasattr(tts_tool.edge_tts_tool, "reset_first_message_flag"):
                             tts_tool.edge_tts_tool.reset_first_message_flag()
                     except Exception as e:
                         print(f"[stop_chat_voice] Error stopping edge_tts_tool: {e}")
-            
+
             # Stop via voice daemon - only stop chat (HIGH priority), keep file reading (NORMAL)
-            if self.mcp_server and hasattr(self.mcp_server, 'voice_daemon') and self.mcp_server.voice_daemon:
+            if (
+                self.mcp_server
+                and hasattr(self.mcp_server, "voice_daemon")
+                and self.mcp_server.voice_daemon
+            ):
                 try:
                     self.mcp_server.voice_daemon.stop_chat_voice()
                 except Exception as e:
                     print(f"[stop_chat_voice] Error stopping voice daemon: {e}")
-            
+
             return {
                 "type": "chat_voice_stopped",
                 "success": True,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to stop voice: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
-    async def read_file_aloud(self, content: str = None, file_path: str = None, start_paragraph: int = 1, language: str = "auto") -> dict:
+
+    async def read_file_aloud(
+        self,
+        content: str = None,
+        file_path: str = None,
+        start_paragraph: int = 1,
+        language: str = "auto",
+    ) -> dict:
         """Read file content aloud with paragraph-by-paragraph TTS."""
         try:
             # Stop any existing chat TTS before starting file reading
-            tts_tool = self.mcp_server.tools.get('speak')
+            tts_tool = self.mcp_server.tools.get("speak")
             if tts_tool:
                 tts_tool.stop_audio(reason="file_reading")
-            
-            if self.mcp_server and 'read_file_aloud' in self.mcp_server.tools:
-                reader_tool = self.mcp_server.tools['read_file_aloud']
+
+            if self.mcp_server and "read_file_aloud" in self.mcp_server.tools:
+                reader_tool = self.mcp_server.tools["read_file_aloud"]
                 result = await reader_tool.execute(
                     content=content,
                     file_path=file_path,
                     start_paragraph=start_paragraph,
-                    language=language
+                    language=language,
                 )
-                
+
                 return {
                     "type": "reading_started",
-                    "success": result.get('success', False),
-                    "message": result.get('message', ''),
-                    "preview": result.get('preview', ''),
-                    "total_paragraphs": result.get('total_paragraphs', 0),
-                    "instruction": result.get('instruction', ''),
-                    "timestamp": datetime.now().isoformat()
+                    "success": result.get("success", False),
+                    "message": result.get("message", ""),
+                    "preview": result.get("preview", ""),
+                    "total_paragraphs": result.get("total_paragraphs", 0),
+                    "instruction": result.get("instruction", ""),
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "File reader tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to start reading: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def stop_reading(self) -> dict:
         """Stop the current file reading session."""
         try:
-            if self.mcp_server and 'stop_reading' in self.mcp_server.tools:
-                stop_tool = self.mcp_server.tools['stop_reading']
+            if self.mcp_server and "stop_reading" in self.mcp_server.tools:
+                stop_tool = self.mcp_server.tools["stop_reading"]
                 result = await stop_tool.execute()
-                
+
                 return {
                     "type": "reading_stopped",
-                    "success": result.get('success', False),
-                    "message": result.get('message', ''),
-                    "paragraphs_read": result.get('paragraphs_read', 0),
-                    "total_paragraphs": result.get('total_paragraphs', 0),
-                    "timestamp": datetime.now().isoformat()
+                    "success": result.get("success", False),
+                    "message": result.get("message", ""),
+                    "paragraphs_read": result.get("paragraphs_read", 0),
+                    "total_paragraphs": result.get("total_paragraphs", 0),
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "error",
                     "success": False,
                     "message": "Stop reading tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to stop reading: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def get_reading_status(self) -> dict:
         """Get current reading status."""
         try:
-            if self.mcp_server and 'read_file_aloud' in self.mcp_server.tools:
-                reader_tool = self.mcp_server.tools['read_file_aloud']
+            if self.mcp_server and "read_file_aloud" in self.mcp_server.tools:
+                reader_tool = self.mcp_server.tools["read_file_aloud"]
                 status = reader_tool.get_reading_status()
-                
+
                 return {
                     "type": "reading_status",
-                    "is_reading": status.get('is_reading', False),
-                    "current_paragraph": status.get('current_paragraph', 0),
-                    "total_paragraphs": status.get('total_paragraphs', 0),
-                    "progress_percent": status.get('progress_percent', 0),
-                    "timestamp": datetime.now().isoformat()
+                    "is_reading": status.get("is_reading", False),
+                    "current_paragraph": status.get("current_paragraph", 0),
+                    "total_paragraphs": status.get("total_paragraphs", 0),
+                    "progress_percent": status.get("progress_percent", 0),
+                    "timestamp": datetime.now().isoformat(),
                 }
             else:
                 return {
                     "type": "reading_status",
                     "is_reading": False,
                     "message": "Reader tool not available",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to get reading status: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     def get_session_memory_status(self) -> dict:
         """Get session memory status and summary."""
         try:
             summary = self.session_memory.get_session_summary()
             recent_attachments = self.session_memory.get_recent_attachments(5)
-            
+
             return {
                 "type": "session_memory_status",
-                "session_id": summary['session_id'],
-                "started_at": summary['started_at'],
-                "message_count": summary['message_count'],
-                "attachment_count": summary['attachment_count'],
-                "recent_topics": summary.get('recent_topics', []),
+                "session_id": summary["session_id"],
+                "started_at": summary["started_at"],
+                "message_count": summary["message_count"],
+                "attachment_count": summary["attachment_count"],
+                "recent_topics": summary.get("recent_topics", []),
                 "recent_attachments": [
                     {
-                        "id": a['id'],
-                        "filename": a['filename'],
-                        "type": a['file_type'],
-                        "uploaded_at": a['datetime']
+                        "id": a["id"],
+                        "filename": a["filename"],
+                        "type": a["file_type"],
+                        "uploaded_at": a["datetime"],
                     }
                     for a in recent_attachments
                 ],
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to get session memory status: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
-    
+
     async def search_session_memory(self, query: str, limit: int = 5) -> dict:
         """Search session memory for messages matching query."""
         try:
             results = self.session_memory.search_messages(query, limit=limit)
-            
+
             return {
                 "type": "session_memory_search",
                 "success": True,
@@ -1732,21 +2102,25 @@ CRITICAL RULES:
                 "result_count": len(results),
                 "results": [
                     {
-                        "role": r['role'],
-                        "content": r['content'][:200] + "..." if len(r['content']) > 200 else r['content'],
-                        "time": r['datetime'],
-                        "has_attachment": bool(r.get('metadata', {}).get('attachment_ids'))
+                        "role": r["role"],
+                        "content": r["content"][:200] + "..."
+                        if len(r["content"]) > 200
+                        else r["content"],
+                        "time": r["datetime"],
+                        "has_attachment": bool(
+                            r.get("metadata", {}).get("attachment_ids")
+                        ),
                     }
                     for r in results
                 ],
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
         except Exception as e:
             return {
                 "type": "error",
                 "success": False,
                 "message": f"Failed to search session memory: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
 
@@ -1759,8 +2133,9 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown."""
     # Set the main event loop for thread-safe async operations in file reading
     from tools.file_reading_tool import set_main_event_loop
+
     set_main_event_loop(asyncio.get_running_loop())
-    
+
     # Startup
     await web_interface.initialize()
     yield
@@ -1773,14 +2148,20 @@ app = FastAPI(
     title="Talkie Web Control Panel",
     description="Web interface for Talkie Voice Assistant",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Mount static files
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")),
+    name="static",
+)
 
 # Setup templates
-templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+templates = Jinja2Templates(
+    directory=os.path.join(os.path.dirname(__file__), "templates")
+)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1803,41 +2184,41 @@ async def get_models():
 
 @app.post("/api/upload")
 async def upload_file_endpoint(
-    file: UploadFile = File(...),
-    transcribe: bool = Form(True)
+    file: UploadFile = File(...), transcribe: bool = Form(True)
 ):
     """Upload a file for attachment."""
     import time
+
     start_time = time.time()
-    
+
     try:
         # Read file content
         content = await file.read()
         filename = file.filename or "unknown_file"
-        
+
         print(f"📤 Upload request received: {filename} ({len(content)} bytes)")
-        
+
         # Check file size
         if not content:
             return JSONResponse(
                 content={"success": False, "error": "Empty file", "filename": filename},
-                status_code=400
+                status_code=400,
             )
-        
+
         result = await web_interface.upload_file(content, filename, transcribe)
-        
+
         elapsed = time.time() - start_time
         print(f"📤 Upload completed in {elapsed:.2f}s: {filename}")
-        
+
         return JSONResponse(content=result)
     except Exception as e:
         import traceback
+
         elapsed = time.time() - start_time
         print(f"❌ Upload error after {elapsed:.2f}s: {e}")
         traceback.print_exc()
         return JSONResponse(
-            content={"success": False, "error": str(e)},
-            status_code=500
+            content={"success": False, "error": str(e)}, status_code=500
         )
 
 
@@ -1851,7 +2232,7 @@ async def get_attachments():
                 "filename": att["filename"],
                 "file_type": att["file_type"],
                 "size": att["size"],
-                "uploaded_at": att["uploaded_at"]
+                "uploaded_at": att["uploaded_at"],
             }
             for i, att in enumerate(web_interface.pending_attachments)
         ]
@@ -1943,7 +2324,7 @@ async def restart_llm_server():
         "type": "llm_server_restarted",
         "success": result["success"],
         "message": result["message"],
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -1951,66 +2332,79 @@ async def restart_llm_server():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time chat."""
     await web_interface.manager.connect(websocket)
-    print(f"[WebSocket] Client connected, total connections: {len(web_interface.manager.active_connections)}")
-    
+    print(
+        f"[WebSocket] Client connected, total connections: {len(web_interface.manager.active_connections)}"
+    )
+
     # Send initial status
     await websocket.send_json(web_interface.get_system_status())
     await websocket.send_json(web_interface.get_available_models())
     await websocket.send_json(web_interface.get_tts_speakers())
-    
+
     try:
         while True:
             # Receive message
             data = await websocket.receive_json()
             message_type = data.get("type")
-            
+
             # Only log non-polling messages
-            if message_type not in ['get_status', 'get_models', 'get_model_params', 'get_qwen_tts_info', 'get_reading_status', 'get_llm_status']:
-                print(f"[WebSocket] Received: {message_type}, connections: {len(web_interface.manager.active_connections)}, manager_id: {id(web_interface.manager)}, web_interface_id: {id(web_interface)}", flush=True)
-            
+            if message_type not in [
+                "get_status",
+                "get_models",
+                "get_model_params",
+                "get_qwen_tts_info",
+                "get_reading_status",
+                "get_llm_status",
+            ]:
+                print(
+                    f"[WebSocket] Received: {message_type}, connections: {len(web_interface.manager.active_connections)}, manager_id: {id(web_interface.manager)}, web_interface_id: {id(web_interface)}",
+                    flush=True,
+                )
+
             if message_type == "user_message":
                 content = data.get("content", "")
-                attachment_ids = data.get("attachment_ids", [])  # Get attachment IDs from frontend
-                
+                attachment_ids = data.get(
+                    "attachment_ids", []
+                )  # Get attachment IDs from frontend
+
                 # Stop any ongoing chat voice before processing new message
                 await web_interface.stop_chat_voice()
-                
+
                 # Send thinking indicator
-                await websocket.send_json({
-                    "type": "thinking",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
+                await websocket.send_json(
+                    {"type": "thinking", "timestamp": datetime.now().isoformat()}
+                )
+
                 # Process message with attachments
                 response = await web_interface.process_message(content, attachment_ids)
                 await websocket.send_json(response)
-                
+
             elif message_type == "get_status":
                 await websocket.send_json(web_interface.get_system_status())
-                
+
             elif message_type == "get_models":
                 await websocket.send_json(web_interface.get_available_models())
-                
+
             elif message_type == "switch_model":
                 model_id = data.get("model_id")
                 if model_id:
                     result = await web_interface.switch_tts_model(model_id)
                     await websocket.send_json(result)
-            
+
             elif message_type == "get_tts_speakers":
                 await websocket.send_json(web_interface.get_tts_speakers())
-            
+
             elif message_type == "switch_tts_speaker":
                 speaker_id = data.get("speaker_id")
                 if speaker_id:
                     result = await web_interface.switch_tts_speaker(speaker_id)
                     await websocket.send_json(result)
-            
+
             elif message_type == "test_tts":
                 speaker_id = data.get("speaker_id") if data else None
                 result = await web_interface.test_tts_speaker(speaker_id)
                 await websocket.send_json(result)
-            
+
             elif message_type == "switch_tts_engine":
                 engine_id = data.get("engine_id")
                 if engine_id:
@@ -2018,156 +2412,187 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json(result)
                     # Send updated models info
                     await websocket.send_json(web_interface.get_available_models())
-            
+
             elif message_type == "switch_edge_voice":
                 voice_id = data.get("voice_id")
                 if voice_id:
                     result = await web_interface.switch_edge_voice(voice_id)
                     await websocket.send_json(result)
-            
+
             elif message_type == "demo_tts":
                 speaker_id = data.get("speaker_id") if data else None
                 demo_text = data.get("text", f"Hello, this is the selected voice")
                 result = await web_interface.demo_tts_speaker(speaker_id, demo_text)
                 await websocket.send_json(result)
-            
+
             elif message_type == "set_voice_output":
                 mode = data.get("mode", "local") if data else "local"
                 result = web_interface.set_voice_output_mode(mode)
                 await websocket.send_json(result)
-            
+
             elif message_type == "get_qwen_tts_info":
                 result = web_interface.get_qwen_tts_info()
                 await websocket.send_json(result)
-            
+
             elif message_type == "set_qwen_tts_model_type":
                 model_type = data.get("model_type", "custom_voice_0.6b")
                 result = web_interface.set_qwen_tts_model_type(model_type)
                 await websocket.send_json(result)
-            
+
             elif message_type == "set_qwen_tts_speaker":
                 speaker = data.get("speaker", "Vivian")
                 result = web_interface.set_qwen_tts_speaker(speaker)
                 await websocket.send_json(result)
-            
+
             elif message_type == "set_qwen_tts_language":
                 language = data.get("language", "Auto")
                 result = web_interface.set_qwen_tts_language(language)
                 await websocket.send_json(result)
-            
+
             elif message_type == "set_qwen_tts_instruct":
                 instruct = data.get("instruct", "")
                 result = web_interface.set_qwen_tts_instruct(instruct)
                 await websocket.send_json(result)
-            
+
             elif message_type == "speak_assistant_response":
                 text = data.get("text", "")
                 if text:
                     result = await web_interface.speak_assistant_response(text)
                     await websocket.send_json(result)
-            
+
             elif message_type == "read_file_aloud":
                 content = data.get("content", "")
                 file_path = data.get("file_path", "")
                 start_paragraph = data.get("start_paragraph", 1)
                 language = data.get("language", "auto")
-                
+
                 if content or file_path:
                     result = await web_interface.read_file_aloud(
                         content=content,
                         file_path=file_path,
                         start_paragraph=start_paragraph,
-                        language=language
+                        language=language,
                     )
                     await websocket.send_json(result)
-            
+
             elif message_type == "stop_reading":
                 result = await web_interface.stop_reading()
                 await websocket.send_json(result)
-            
+
             elif message_type == "get_reading_status":
                 await websocket.send_json(web_interface.get_reading_status())
-            
+
             elif message_type == "get_llm_status":
                 await websocket.send_json(web_interface.get_llm_status())
-            
+
             elif message_type == "switch_llm_model":
                 model_id = data.get("model_id")
                 print(f"[WebSocket] switch_llm_model received: model_id={model_id}")
                 if model_id:
                     # Send switching notification
-                    await websocket.send_json({
-                        "type": "llm_switching",
-                        "message": f"Switching to model: {model_id}...",
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    
+                    await websocket.send_json(
+                        {
+                            "type": "llm_switching",
+                            "message": f"Switching to model: {model_id}...",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+
                     result = await web_interface.switch_llm_model(model_id)
                     print(f"[WebSocket] switch_llm_model result: {result}")
                     await websocket.send_json(result)
-                    
+
                     # Send updated status
                     await websocket.send_json(web_interface.get_available_models())
-            
+
+            elif message_type == "switch_llm_provider":
+                provider = data.get("provider")
+                print(f"[WebSocket] switch_llm_provider received: provider={provider}")
+                if provider:
+                    await websocket.send_json(
+                        {
+                            "type": "llm_switching",
+                            "message": f"Switching to provider: {provider}...",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+                    result = await web_interface.switch_llm_provider(provider)
+                    print(f"[WebSocket] switch_llm_provider result: {result}")
+                    await websocket.send_json(result)
+
+                    # Send updated status
+                    await websocket.send_json(web_interface.get_available_models())
+
             elif message_type == "restart_llm_server":
-                await websocket.send_json({
-                    "type": "llm_restarting",
-                    "message": "Restarting LLM server...",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
+                await websocket.send_json(
+                    {
+                        "type": "llm_restarting",
+                        "message": "Restarting LLM server...",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
                 result = web_interface.model_manager.restart_server()
-                await websocket.send_json({
-                    "type": "llm_server_restarted",
-                    "success": result["success"],
-                    "message": result["message"],
-                    "timestamp": datetime.now().isoformat()
-                })
+                await websocket.send_json(
+                    {
+                        "type": "llm_server_restarted",
+                        "success": result["success"],
+                        "message": result["message"],
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 await websocket.send_json(web_interface.get_llm_status())
-            
+
             elif message_type == "get_model_params":
                 params = web_interface.model_manager.get_custom_params()
-                await websocket.send_json({
-                    "type": "model_params",
-                    "params": params,
-                    "timestamp": datetime.now().isoformat()
-                })
-            
+                await websocket.send_json(
+                    {
+                        "type": "model_params",
+                        "params": params,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
             elif message_type == "set_model_params":
                 global_params = data.get("global_params")
                 model_id = data.get("model_id")
                 model_params = data.get("model_params")
                 extra_params = data.get("extra_params")
-                
+
                 success = True
-                
+
                 if global_params is not None:
                     if not web_interface.model_manager.set_global_params(global_params):
                         success = False
-                
+
                 if model_id and model_params is not None:
-                    if not web_interface.model_manager.set_model_params(model_id, model_params):
+                    if not web_interface.model_manager.set_model_params(
+                        model_id, model_params
+                    ):
                         success = False
-                
+
                 if extra_params is not None:
                     if not web_interface.model_manager.set_extra_params(extra_params):
                         success = False
-                
-                await websocket.send_json({
-                    "type": "model_params_saved",
-                    "success": success,
-                    "message": "Parameters saved" if success else "Failed to save parameters",
-                    "params": web_interface.model_manager.get_custom_params(),
-                    "timestamp": datetime.now().isoformat()
-                })
-                    
+
+                await websocket.send_json(
+                    {
+                        "type": "model_params_saved",
+                        "success": success,
+                        "message": "Parameters saved"
+                        if success
+                        else "Failed to save parameters",
+                        "params": web_interface.model_manager.get_custom_params(),
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
             elif message_type == "clear_history":
                 web_interface.conversation_history.clear()
-                await websocket.send_json({
-                    "type": "history_cleared",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
+                await websocket.send_json(
+                    {"type": "history_cleared", "timestamp": datetime.now().isoformat()}
+                )
+
     except WebSocketDisconnect:
         web_interface.manager.disconnect(websocket)
     except Exception as e:
@@ -2201,14 +2626,16 @@ async def get_session_attachments():
             "type": "session_attachments",
             "attachments": [
                 {
-                    "id": a['id'],
-                    "filename": a['filename'],
-                    "type": a['file_type'],
-                    "uploaded_at": a['datetime'],
-                    "preview": a.get('content_preview', '')[:100] + "..." if a.get('content_preview') else None
+                    "id": a["id"],
+                    "filename": a["filename"],
+                    "type": a["file_type"],
+                    "uploaded_at": a["datetime"],
+                    "preview": a.get("content_preview", "")[:100] + "..."
+                    if a.get("content_preview")
+                    else None,
                 }
                 for a in attachments
-            ]
+            ],
         }
     except Exception as e:
         return {"type": "error", "message": str(e)}
@@ -2222,7 +2649,7 @@ async def clear_session_memory():
         return {
             "type": "session_memory_cleared",
             "message": "Session memory cleared successfully",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
         return {"type": "error", "message": str(e)}
@@ -2245,11 +2672,11 @@ Features:
 Press Ctrl+C to stop
 """)
     uvicorn.run(
-        app, 
-        host=host, 
+        app,
+        host=host,
         port=port,
         ws_ping_interval=30,  # Send ping every 30 seconds
-        ws_ping_timeout=60,   # Wait 60 seconds for pong response
+        ws_ping_timeout=60,  # Wait 60 seconds for pong response
     )
 
 

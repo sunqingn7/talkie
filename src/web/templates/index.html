@@ -153,6 +153,19 @@
                             <div class="server-status" id="llm-server-status" style="margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; font-size: 13px; background: rgba(239, 68, 68, 0.1); color: var(--error-color);">
                                 <i class="fas fa-circle"></i> Checking server status...
                             </div>
+                            
+                            <!-- LLM Provider Selector -->
+                            <div style="margin-bottom: 12px;">
+                                <label style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                    LLM Provider
+                                </label>
+                                <select id="llm-provider-select" 
+                                    style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-dark); color: var(--text-primary); font-size: 13px; cursor: pointer;"
+                                    onchange="window.talkieApp && window.talkieApp.handleProviderChange(this.value)">
+                                    <option value="">Loading providers...</option>
+                                </select>
+                            </div>
+                            
                             <div class="model-list" id="llm-model-list">
                                 <!-- LLM models will be populated here -->
                             </div>

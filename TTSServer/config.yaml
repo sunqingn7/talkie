@@ -6,13 +6,17 @@ backends:
   edge_tts:
     enabled: true
     default_voice: "en-US-AriaNeural"
-  
+
   qwen_tts:
     enabled: true
     model_type: "custom_voice_0.6b"
     default_speaker: "Vivian"
     device: "cuda:0"
     dtype: "bfloat16"
+    # Streaming mode settings
+    use_streaming_mode: true # Use direct transformers for low-latency streaming
+    chunk_size: 50 # Text chunk size for streaming
+    # Hybrid mode for faster first chunk
     hybrid_mode: true
     fast_model_for_first: true
 
