@@ -72,7 +72,18 @@ class LLMOrchestrator:
         return available
 
     async def initialize(self):
-        """Async initialization - call detect_available_agents."""
+        """Async initialization - auto-detect vllm models and available agents."""
+        # Auto-detect vllm models first
+        if self.main_provider and hasattr(self.main_provider, 'auto_detect_model'):
+            await self.main_provider.auto_detect_model()
+
+        if self.fallback_provider and hasattr(self.fallback_provider, 'auto_detect_model'):
+            await self.fallback_provider.auto_detect_model()
+
+        for agent in self.agents.values():
+            if hasattr(agent, 'auto_detect_model'):
+                await agent.auto_detect_model()
+
         if self.auto_detect_agents:
             await self.detect_available_agents()
 
@@ -443,6 +454,26 @@ class LLMOrchestrator:
                         )
             except Exception as e:
                 print(f"[LLMOrchestrator] Failed to get vLLM models: {e}")
+
+        # If switching to llama.cpp and no model specified, get available models
+        if new_provider == "llamacpp" and not model:
+            try:
+                llamacpp_config = new_config.copy()
+                llamacpp_config["base_url"] = llamacpp_config.get("base_url", "http://localhost:8080")
+                print(
+                    f"[LLMOrchestrator] Getting llama.cpp models, base_url: {llamacpp_config['base_url']}"
+                )
+                temp_provider = LLMFactory.create("llamacpp", llamacpp_config)
+                if temp_provider:
+                    models = await temp_provider.list_models()
+                    print(f"[LLMOrchestrator] llama.cpp available models: {models}")
+                    if models:
+                        new_config["model"] = models[0]["id"]
+                        print(
+                            f"[LLMOrchestrator] Auto-selected llama.cpp model: {new_config['model']}"
+                        )
+            except Exception as e:
+                print(f"[LLMOrchestrator] Failed to get llama.cpp models: {e}")
 
         # Create new provider
         new_provider_instance = LLMFactory.create(new_provider, new_config)

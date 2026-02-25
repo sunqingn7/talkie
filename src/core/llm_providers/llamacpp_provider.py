@@ -35,6 +35,20 @@ class LlamaCppProvider(LLMProviderBase):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.base_url = config.get("base_url", "http://localhost:8080")
+        self._model_needs_detection = not self.model
+
+    async def auto_detect_model(self):
+        """Auto-detect model from llama.cpp server if not set in config."""
+        if self.model:
+            print(f"[LlamaCppProvider] Model already set from config: {self.model}")
+            return
+        
+        models = await self.list_models()
+        if models:
+            self.model = models[0]["id"]
+            print(f"[LlamaCppProvider] Auto-detected model: {self.model}")
+        else:
+            print("[LlamaCppProvider] No models found from server, requests will fail")
         
     async def chat_completion(
         self,
@@ -42,6 +56,12 @@ class LlamaCppProvider(LLMProviderBase):
         tools: Optional[List[Dict]] = None,
         stream: bool = False
     ) -> Dict[str, Any]:
+        if not self.model:
+            return {
+                "error": "llama.cpp: no model configured or auto-detected",
+                "choices": [{"message": {"content": "Error: No model available. Please configure a model or ensure llama.cpp server is running."}}]
+            }
+        
         try:
             url = f"{self.base_url}/v1/chat/completions"
             

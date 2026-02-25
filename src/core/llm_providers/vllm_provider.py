@@ -36,6 +36,20 @@ class VLLMProvider(LLMProviderBase):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.base_url = config.get("base_url", "http://localhost:8000")
+        self._model_needs_detection = not self.model
+
+    async def auto_detect_model(self):
+        """Auto-detect model from vllm server if not set in config."""
+        if self.model:
+            print(f"[VLLMProvider] Model already set from config: {self.model}")
+            return
+
+        models = await self.list_models()
+        if models:
+            self.model = models[0]["id"]
+            print(f"[VLLMProvider] Auto-detected model: {self.model}")
+        else:
+            print("[VLLMProvider] No models found from server, requests will fail")
 
     async def chat_completion(
         self,
@@ -43,6 +57,18 @@ class VLLMProvider(LLMProviderBase):
         tools: Optional[List[Dict]] = None,
         stream: bool = False,
     ) -> Dict[str, Any]:
+        if not self.model:
+            return {
+                "error": "vllm: no model configured or auto-detected",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Error: No model available. Please configure a model or ensure vllm server is running."
+                        }
+                    }
+                ],
+            }
+
         try:
             url = f"{self.base_url}/v1/chat/completions"
 
