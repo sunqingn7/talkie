@@ -295,11 +295,13 @@ class QwenTTSTool(BaseTool):
         import threading
         import time
 
+        # Mark as loading immediately to prevent duplicate loads
+        self._model_loading = True
+        self._load_error = None
+
         def load_in_background():
             # Small delay to let server fully start
             time.sleep(2)
-            self._model_loading = True
-            self._load_error = None
             try:
                 self._load_model_sync()
             except Exception as e:

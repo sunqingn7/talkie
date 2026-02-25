@@ -256,9 +256,31 @@ class TTSTool(BaseTool):
         """Internal warmup implementation."""
         try:
             import time
+            import asyncio
+
+            # Check if using qwen_tts and wait for model to load
+            if hasattr(self, "current_engine") and self.current_engine == "qwen_tts":
+                print("[TTS] Waiting for Qwen TTS model to load...")
+                # Wait up to 60 seconds for model to load
+                max_wait = 60
+                waited = 0
+                while waited < max_wait:
+                    # Check if model is loaded via qwen_tts tool
+                    qwen_tool = getattr(self, "qwen_tts_tool", None)
+                    if qwen_tool and getattr(qwen_tool, "_model_loaded", False):
+                        print("[TTS] Qwen TTS model loaded, starting warmup...")
+                        break
+                    time.sleep(0.5)
+                    waited += 0.5
+                else:
+                    print("[TTS] Qwen TTS model load timeout, skipping warmup")
+                    return
 
             time.sleep(0.5)
-            result = self.execute(text="测试", language="zh-cn", audio_type="chat")
+
+            result = asyncio.run(
+                self.execute(text="测试", language="zh-cn", audio_type="chat")
+            )
             if result.get("success"):
                 print("[TTS] Warmup completed successfully")
             else:
