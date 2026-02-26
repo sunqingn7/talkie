@@ -5,12 +5,15 @@
 ## ✨ Features
 
 - **Voice Interface**: Speech-to-text (whisper.cpp) + Text-to-Speech
-- **Multiple TTS Engines**: Edge TTS (online, high quality), Coqui XTTS, pyttsx3
+- **Multiple TTS Engines**: Qwen TTS (default), Edge TTS, Coqui XTTS, pyttsx3
 - **16+ Voices**: English, Chinese, Japanese, Korean, Spanish, French, German, and more
 - **Web Control Panel**: Real-time control via browser interface
+- **File Reading**: Read uploaded files or webpages aloud with pause/resume
+- **Smart Interruption**: Chat messages pause file reading, auto-resume after response
+- **Multi-LLM Support**: Switch between vllm, llama.cpp, ollama, and cloud providers
 - **Weather**: Automatic location detection from IP, works for any city worldwide
 - **Web Search**: Integrated search via Tavily API / DuckDuckGo
-- **13 Built-in Tools**: Weather, calculator, timer, file operations, commands, etc.
+- **14+ Built-in Tools**: Weather, calculator, timer, file operations, commands, etc.
 
 ## 🚀 Quick Start
 
@@ -67,11 +70,25 @@ Access at **http://localhost:8082**
 
 ## 🌍 Recent Updates
 
-### Edge TTS Integration
-- **Default TTS Engine**: Microsoft Edge TTS (online, no download required)
-- **16+ Voices**: Multilingual support with high quality
-- **Fast & Efficient**: No model loading time, minimal latency
-- **Fallback System**: Coqui TTS → pyttsx3 if unavailable
+### File Reading with Pause/Resume (Latest)
+- **Chunk-by-Chunk Reading**: Progressive loading with buffer-based streaming
+- **Smart Interruption**: Chat messages automatically pause file reading
+- **Auto-Resume**: File reading resumes automatically after chat response
+- **Position Persistence**: Resume from exact position across sessions
+- **URL Support**: Read webpages directly by providing URL
+
+### Multi-LLM Orchestrator
+- **Provider Support**: vllm, llama.cpp, ollama, Google, Anthropic, xAI
+- **Auto-Detection**: Automatic model detection for vllm and llama.cpp
+- **Agent System**: Specialized agents (coder, reasoner, searcher, etc.)
+- **Fallback System**: Automatic fallback to backup provider on failure
+- **Dynamic Switching**: Switch providers via web interface or commands
+
+### Qwen TTS Integration
+- **Default TTS Engine**: Qwen/Qwen3-TTS-12Hz (high quality, fast)
+- **Multilingual**: Excellent Chinese and English support
+- **Auto Language Detection**: Automatically detects input language
+- **Voice Design**: Custom voice characteristics support
 
 ### Weather Tool Upgrade
 - **API**: Open-Meteo (free, no API key)
@@ -82,10 +99,12 @@ Access at **http://localhost:8082**
 - **Smart Query Handling**: Auto-detects location if not provided
 
 ### System Improvements
+- **Voice Daemon**: Centralized TTS queue with priority management
+- **Priority-Based Speech**: HIGH (chat) vs NORMAL (file reading) priorities
 - **Dynamic Audio Timeout**: Long responses play completely without cutoff
+- **Sentence-Based Chunking**: Intelligent text splitting for natural pauses
 - **Config Persistence**: All settings saved automatically
-- **Inline Event Handlers**: Reliable dropdown controls
-- **Enhanced Documentation**: Improved coverage and usage examples
+- **Enhanced Web Interface**: Real-time status, model switching, file upload
 
 ## 📁 Configuration
 
@@ -93,8 +112,12 @@ Access at **http://localhost:8082**
 
 ```yaml
 tts:
-  engine: edge_tts  # Default: edge_tts, coqui, pyttsx3
-  edge_voice: en-US-AriaNeural
+  engine: qwen_tts  # Options: qwen_tts, edge_tts, coqui, pyttsx3
+  voice_output: web  # Output to web interface (or 'local' for system audio)
+
+llm:
+  default_provider: llamacpp  # Options: vllm, llamacpp, ollama, google, etc.
+  auto_detect_models: true  # Auto-detect available models
 
 weather:
   api_key: null  # Optional: OpenWeatherMap API key
@@ -109,46 +132,70 @@ web_search:
 
 | Engine | Type | Description |
 |--------|------|-------------|
-| **edge_tts** | Online | Edge TTS - default, 16+ voices |
+| **qwen_tts** | Local (GPU) | Qwen3-TTS - default, high quality, fast |
+| **edge_tts** | Online | Edge TTS - 16+ voices, no install |
 | **coqui** | Local | XTTS-v2 - requires ~1.5GB download |
 | **pyttsx3** | Local | Basic fallback TTS |
+
+### LLM Providers
+
+| Provider | Type | Description |
+|----------|------|-------------|
+| **vllm** | Local (GPU) | High-throughput inference server |
+| **llamacpp** | Local (CPU/GPU) | llama.cpp backend, auto-detect models |
+| **ollama** | Local | Ollama runtime support |
+| **google** | Cloud | Google Gemini API |
+| **anthropic** | Cloud | Claude API |
+| **xAI** | Cloud | Grok API |
 
 ## 🛠️ Available Tools
 
 1. ✅ `listen` - Speech-to-text (whisper.cpp)
-2. ✅ `speak` - Text-to-speech (Edge TTS / Coqui / pyttsx3)
-3. ✅ `weather` - Weather with IP auto-detection
-4. ✅ `execute_command` - Run shell commands
-5. ✅ `read_file` - Read files
-6. ✅ `write_file` - Write files
-7. ✅ `list_directory` - List directories
-8. ✅ `wake_word` - Wake phrase detection
-9. ✅ `voice_activity` - Voice activity detection
-10. ✅ `timer` - Timer functionality
-11. ✅ `calculator` - Math calculations
-12. ✅ `web_search` - Web search
-13. ✅ `datetime` - Current date/time
+2. ✅ `speak` - Text-to-speech (Qwen TTS / Edge TTS / Coqui / pyttsx3)
+3. ✅ `read_file_chunk` - Read files/webpages aloud with pause/resume
+4. ✅ `pause_reading` - Pause current file reading
+5. ✅ `resume_reading` - Resume paused file reading
+6. ✅ `stop_reading` - Stop file reading completely
+7. ✅ `weather` - Weather with IP auto-detection
+8. ✅ `execute_command` - Run shell commands
+9. ✅ `write_file` - Write files
+10. ✅ `list_directory` - List directories
+11. ✅ `wake_word` - Wake phrase detection
+12. ✅ `voice_activity` - Voice activity detection
+13. ✅ `timer` - Timer functionality
+14. ✅ `calculator` - Math calculations
+15. ✅ `web_search` - Web search
+16. ✅ `datetime` - Current date/time
 
 ## 📝 Usage Examples
 
 ### Voice Commands
 
 ```
-"What's the weather?" → Auto-detects your location
-"What's the weather in Tokyo?" → Gets Tokyo weather
-"What date is it today?" → System date/time
+"What's the weather?" → Auto-detects location
+"What's the weather in Tokyo?" → Tokyo weather
+"Read this file" → Reads uploaded file aloud
+"Pause reading" / "Resume reading" → Control file reading
 "Search for AI news" → Web search
 "Set a 5 minute timer"
 "Calculate 15 times 23"
 ```
+
+### File Reading
+
+- **Upload a file** via web interface or mention it in chat
+- **Read webpage**: Just provide a URL (e.g., "Read https://example.com")
+- **Chat during reading**: File reading pauses automatically, resumes after response
+- **Position saved**: Resume from exact position across sessions
 
 ### Web Interface
 
 1. Start web server: `python web_server.py`
 2. Open browser: `http://localhost:8082`
 3. Use **Control Panel** to:
-   - Switch TTS engines
-   - Select voices/personas
+   - Switch TTS engines (Qwen, Edge, Coqui)
+   - Switch LLM providers (vllm, llama.cpp, ollama, cloud)
+   - Upload files for reading
    - Test voices
    - Monitor system status
 
@@ -194,15 +241,21 @@ talkie/
 │   ├── settings.yaml      # Main configuration (not in git)
 │   └── settings.example.yaml  # Example configuration template
 ├── src/
-│   ├── core/             # Core LLM, model management
+│   ├── core/             # Core LLM, model management, voice daemon
+│   │   ├── llm_providers/  # Multi-provider LLM support
+│   │   ├── voice_daemon.py # Priority-based TTS queue
+│   │   └── reading_position_manager.py  # Position persistence
 │   ├── mcp_integration/  # MCP server and tool registration
 │   ├── tools/            # All available tools
-│   │   ├── edge_tts_tool.py     # Edge TTS (NEW)
+│   │   ├── qwen_tts_tool.py     # Qwen TTS (default)
+│   │   ├── edge_tts_tool.py     # Edge TTS
 │   │   ├── tts_tool.py          # TTS manager
-│   ├── web_search_tool.py
-│   └── weather_tool.py     # Weather with IP detection
+│   │   ├── file_reading_tool.py # File reading with pause/resume
+│   │   └── web_fetch_tool.py    # Webpage fetching
+│   ├── utils/            # Utilities
+│   │   └── file_stream_reader.py # Streaming file reader
 │   └── web/              # Web interface
-│       ├── server.py
+│       ├── web_server.py
 │       ├── templates/
 │       │   └── index.html
 │       └── static/
@@ -243,11 +296,16 @@ Contributions are welcome! Areas for improvement:
 
 ## 📝 Notes
 
+- **Qwen TTS** requires GPU for best performance (CUDA recommended)
 - **Edge TTS** requires internet connection (online service)
 - **Coqui TTS** can work offline but requires ~1.5GB download
+- **vllm/llama.cpp** require compatible GGUF or HF models
 - **Weather** uses ipinfo.io for location detection (free, no signup needed)
 - **Web Search** requires Tavily API key (free tier: 1000 calls/month)
+- **File Reading** works with any text file or webpage URL
 
 ---
 
-**Built with ❤️ using Python, FastAPI, and edge-tts**
+**Built with ❤️ using Python, FastAPI, Qwen TTS, and Multi-LLM Orchestrator**
+
+**Latest**: Commit `13b9dc0` - Pause/resume file reading when chat arrives
