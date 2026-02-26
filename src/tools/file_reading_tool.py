@@ -1208,11 +1208,11 @@ class FileReadingTool(BaseTool):
                 "status": "not_reading",
             }
 
-        self.is_reading = False
+        print(f"[FileReading] pause_reading() called")
         self.is_paused = True
 
         if self.voice_daemon:
-            self.voice_daemon.stop_current()
+            self.voice_daemon.stop_file_reading()
 
         if self.current_file_id:
             self.position_manager.mark_paused(self.current_file_id)
@@ -1260,14 +1260,9 @@ class FileReadingTool(BaseTool):
 
         self.position_manager.mark_resumed(self.current_file_id)
 
-        if self._reading_thread and self._reading_thread.is_alive():
-            print(f"[FileReading] Thread already running")
-            return self._get_reading_status()
-
-        self._reading_thread = threading.Thread(
-            target=self._read_background, daemon=True
-        )
-        self._reading_thread.start()
+        # For buffer-based reading, just trigger the next chunk
+        # The buffer loader thread will continue automatically
+        self._play_next_chunk()
 
         return self._get_reading_status()
 

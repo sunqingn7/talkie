@@ -759,6 +759,7 @@ class TalkieApp {
                         this.audioQueue = [];
                         this.currentAudioIndex = 0;
                         this.isAudioPlaying = false;
+                        this.audioBatchOffset = 0;
                     }
                     
                     // If we're at the end of the queue (finished playing all previous chunks)
