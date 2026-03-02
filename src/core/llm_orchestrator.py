@@ -74,14 +74,16 @@ class LLMOrchestrator:
     async def initialize(self):
         """Async initialization - auto-detect vllm models and available agents."""
         # Auto-detect vllm models first
-        if self.main_provider and hasattr(self.main_provider, 'auto_detect_model'):
+        if self.main_provider and hasattr(self.main_provider, "auto_detect_model"):
             await self.main_provider.auto_detect_model()
 
-        if self.fallback_provider and hasattr(self.fallback_provider, 'auto_detect_model'):
+        if self.fallback_provider and hasattr(
+            self.fallback_provider, "auto_detect_model"
+        ):
             await self.fallback_provider.auto_detect_model()
 
         for agent in self.agents.values():
-            if hasattr(agent, 'auto_detect_model'):
+            if hasattr(agent, "auto_detect_model"):
                 await agent.auto_detect_model()
 
         if self.auto_detect_agents:
@@ -367,9 +369,11 @@ class LLMOrchestrator:
             if tool_results:
                 # Add tool results to messages and get final response
                 messages.append({"role": "assistant", "content": content})
+                # Use 'user' role instead of 'system' to avoid chat template errors
+                # System messages must be at the beginning of the conversation
                 messages.append(
                     {
-                        "role": "system",
+                        "role": "user",
                         "content": "Here are the results from tools/agents:\n"
                         + "\n".join([r["content"] for r in tool_results]),
                     }
@@ -459,7 +463,9 @@ class LLMOrchestrator:
         if new_provider == "llamacpp" and not model:
             try:
                 llamacpp_config = new_config.copy()
-                llamacpp_config["base_url"] = llamacpp_config.get("base_url", "http://localhost:8080")
+                llamacpp_config["base_url"] = llamacpp_config.get(
+                    "base_url", "http://localhost:8080"
+                )
                 print(
                     f"[LLMOrchestrator] Getting llama.cpp models, base_url: {llamacpp_config['base_url']}"
                 )

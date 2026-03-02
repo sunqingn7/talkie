@@ -155,7 +155,9 @@ class TalkieMCPServer:
         if "music_player" in enabled:
             from tools.music_player_tool import MusicPlayerTool
 
-            self.tools["music_player"] = MusicPlayerTool(self.config)
+            self.tools["music_player"] = MusicPlayerTool(
+                self.config, web_interface=self._web_interface
+            )
 
         # Register Session Memory tools
         # These allow the LLM to query conversation history and context

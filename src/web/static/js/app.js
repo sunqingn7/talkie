@@ -108,6 +108,32 @@ class TalkieApp {
         this.adjustTextareaHeight();
     }
     
+    initWidgets() {
+        // Initialize widget system only once
+        if (this.widgetManager) {
+            console.log('[TalkieApp] Widget manager already initialized');
+            return;
+        }
+        
+        try {
+            if (typeof WidgetManager === 'undefined') {
+                console.warn('[TalkieApp] WidgetManager not loaded');
+                return;
+            }
+            
+            this.widgetManager = new WidgetManager(this);
+            
+            // Register available widgets
+            if (typeof MusicPlayerWidget !== 'undefined') {
+                this.widgetManager.registerWidget('music', MusicPlayerWidget);
+            }
+            
+            console.log('[TalkieApp] Widget system initialized');
+        } catch (error) {
+            console.error('[TalkieApp] Failed to initialize widgets:', error);
+        }
+    }
+    
     setupEventListeners() {
         // Navigation
         document.querySelectorAll('.nav-item').forEach(item => {
@@ -554,6 +580,9 @@ class TalkieApp {
                 console.log('WebSocket connected');
                 this.reconnectAttempts = 0;
                 this.updateConnectionStatus(true);
+                
+                // Initialize widget system after WebSocket connection
+                this.initWidgets();
             };
             
             this.ws.onmessage = (event) => {

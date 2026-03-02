@@ -9,6 +9,8 @@ import re
 import sys
 import os
 import tempfile
+import subprocess
+import time
 from typing import Dict, List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -582,6 +584,20 @@ class WebTalkieInterface:
                 tools = self.llm_client.format_tools_for_llm(tools_dict)
                 print(
                     f"[Tools Available] {len(tools)} tools: {[t['function']['name'] for t in tools]}"
+                )
+
+                # Debug: Log messages before sending to LLM
+                print(f"\n[DEBUG] Sending {len(messages)} messages to LLM:")
+                for i, msg in enumerate(messages[:5]):  # Show first 5 messages
+                    role = msg.get("role", "unknown")
+                    content_preview = str(msg.get("content", ""))[:100].replace(
+                        "\n", " "
+                    )
+                    print(f"  [{i}] {role}: {content_preview}...")
+                if len(messages) > 5:
+                    print(f"  ... and {len(messages) - 5} more messages")
+                print(
+                    f"[DEBUG] System message at index 0: {messages[0].get('role') if messages else 'NO MESSAGES'}\n"
                 )
 
                 loop = asyncio.get_event_loop()
@@ -2180,6 +2196,78 @@ async def get_status():
 async def get_models():
     """Get available models."""
     return web_interface.get_available_models()
+
+
+@app.get("/api/music/stream")
+async def stream_music(token: str, request: Request):
+    """Stream audio to browser via HTTP."""
+    from fastapi.responses import StreamingResponse
+    from fastapi import HTTPException
+
+    # Find the music player tool
+    music_tool = None
+    if web_interface and web_interface.mcp_server:
+        music_tool = web_interface.mcp_server.tools.get("music_player")
+
+    if not music_tool or not hasattr(music_tool, "stream_cache"):
+        raise HTTPException(
+            status_code=404, detail="Stream not found or music player not available"
+        )
+
+    # Get cached direct URL for this token
+    stream_data = music_tool.stream_cache.get(token)
+    if not stream_data:
+        raise HTTPException(status_code=404, detail="Stream expired or not found")
+
+    # Check if stream has expired
+    if time.time() > stream_data.get("expires", 0):
+        del music_tool.stream_cache[token]
+        raise HTTPException(status_code=410, detail="Stream expired")
+
+    direct_url = stream_data.get("url")
+
+    if not direct_url:
+        raise HTTPException(status_code=404, detail="No URL in stream cache")
+
+    # Stream via ffmpeg - convert to MP3 for universal browser compatibility
+    try:
+        print(
+            f"[Music Stream] Starting stream for token {token}: {stream_data.get('title', 'Unknown')}"
+        )
+
+        process = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-i",
+                direct_url,
+                "-acodec",
+                "libmp3lame",
+                "-ab",
+                "192k",
+                "-ar",
+                "44100",
+                "-f",
+                "mp3",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=1024 * 1024,  # 1MB buffer
+        )
+
+        return StreamingResponse(
+            process.stdout,
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except Exception as e:
+        print(f"[Music Stream] Error starting stream: {e}")
+        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
 
 
 @app.post("/api/upload")

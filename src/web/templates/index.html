@@ -49,8 +49,10 @@
             </div>
         </aside>
         
-        <!-- Main Content -->
-        <main class="main-content">
+        <!-- Main Area (Content + Widget Panel) -->
+        <div class="main-area">
+            <!-- Main Content -->
+            <main class="main-content">
             <!-- Chat View -->
             <div class="view active" id="chat-view">
                 <div class="chat-header">
@@ -592,6 +594,45 @@
                 </div>
             </div>
         </main>
+        
+        <!-- Widget Panel -->
+        <aside class="widget-panel" id="widget-panel">
+            <div class="widget-panel-header">
+                <span>Widgets</span>
+                <button class="widget-panel-toggle" id="toggle-widget-panel" title="Toggle widget panel">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+            </div>
+            
+            <div class="widget-container" id="widget-container">
+                <!-- Music Player Widget -->
+                <div class="widget" id="music-widget">
+                    <div class="widget-header">
+                        <span><i class="fas fa-music"></i> Music Player</span>
+                    </div>
+                    <div class="widget-content">
+                        <div class="music-info">
+                            <div class="music-status" id="music-status">Not Playing</div>
+                            <div class="music-track" id="music-track"></div>
+                        </div>
+                        <div class="music-controls">
+                            <button class="music-btn" id="music-play-pause" title="Play/Pause">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            <button class="music-btn" id="music-stop" title="Stop">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                            <div class="volume-control">
+                                <i class="fas fa-volume-up"></i>
+                                <input type="range" id="music-volume" min="0" max="1" step="0.1" value="1" title="Volume">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Future widgets will be added here dynamically -->
+            </div>
+        </aside>
     </div>
     
     <!-- Voice Recording Modal -->
@@ -614,5 +655,7 @@
     </div>
     
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/widgets.js"></script>
+    <script src="/static/js/widgets/musicPlayer.js"></script>
 </body>
 </html>

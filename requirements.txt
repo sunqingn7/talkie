@@ -59,3 +59,8 @@ aiohttp>=3.9.0  # For TTS server client
 jinja2>=3.1.0
 python-multipart>=0.0.6
 psutil>=5.9.0  # For process management (LLM server control)
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
