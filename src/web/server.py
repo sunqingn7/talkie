@@ -38,7 +38,9 @@ from mcp_integration.server import TalkieMCPServer
 from core.llm_client import LLMClient
 from core.model_manager import get_model_manager
 from core.session_memory import get_session_memory, SessionMemory
+from core.memory_manager import get_memory_manager
 from tools.file_attachment_tool import FileAttachmentTool
+from web.memory_routes import router as memory_router
 
 # Import new multi-LLM components
 try:
@@ -144,6 +146,12 @@ class WebTalkieInterface:
         print(
             f"[SessionMemory] Initialized with session: {self.session_memory.session_id}"
         )
+
+        # Initialize memory manager for persistent conversation storage
+        memory_dir = os.path.join(os.path.dirname(__file__), "..", "..", "Memory")
+        self.memory_manager = get_memory_manager(memory_dir=memory_dir, auto_start=True)
+        self.current_session_id = None  # Track current chat session
+        print(f"[MemoryManager] Initialized at {memory_dir}")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -371,6 +379,13 @@ class WebTalkieInterface:
                 metadata={"attachment_ids": attachment_ids} if attachment_ids else {},
             )
 
+            # Save to persistent memory
+            if self.current_session_id is None:
+                self.current_session_id = self.memory_manager.get_or_create_session()
+            self.memory_manager.add_message(
+                self.current_session_id, "user", user_message
+            )
+
             # Build context messages
             messages = self._build_context_messages(user_message)
 
@@ -573,6 +588,11 @@ class WebTalkieInterface:
                 # Update conversation history
                 self._add_to_history(user_message, content)
                 self.session_memory.record_message(role="assistant", content=content)
+
+                # Save assistant response to memory
+                self.memory_manager.add_message(
+                    self.current_session_id, "assistant", content
+                )
 
                 return {
                     "type": "assistant_message",
@@ -2166,6 +2186,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Include memory routes
+app.include_router(memory_router)
 
 # Mount static files
 app.mount(
