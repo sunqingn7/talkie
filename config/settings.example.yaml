@@ -36,6 +36,12 @@ tts:
   speaker_id: null
   speakers_list: []
 
+# Music Player Settings
+music:
+  output: web  # Options: 'web' (play in browser) or 'local' (play via mpv on server)
+  stream_cache_expiry: 600  # Cache extracted URLs for 10 minutes (seconds)
+  max_concurrent_streams: 3  # Maximum simultaneous streams
+
 # LLM Settings
 llm:
   provider: llama.cpp
@@ -128,3 +134,9 @@ voice_activity:
   threshold: 0.5
   frame_duration_ms: 30
   padding_duration_ms: 300
+
+# Logging Configuration
+logging:
+  level: INFO  # Options: DEBUG, INFO, WARNING, ERROR
+  # Optional: log file path (leave null for console only)
+  # file: logs/talkie.log

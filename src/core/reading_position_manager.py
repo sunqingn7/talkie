@@ -5,6 +5,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class ReadingPosition:
@@ -71,7 +75,7 @@ class ReadingPositionManager:
 
         self._load_positions()
 
-    def _load_positions(self):
+    def _load_positions(self) -> None:
         """Load positions from persistent storage."""
         if self.positions_file.exists():
             try:
@@ -79,40 +83,40 @@ class ReadingPositionManager:
                     data = json.load(f)
                     for file_id, pos_data in data.items():
                         self._positions[file_id] = ReadingPosition.from_dict(pos_data)
-                print(
-                    f"[ReadingPositionManager] Loaded {len(self._positions)} reading positions"
-                )
+                logger.info("Loaded %d reading positions", len(self._positions))
             except Exception as e:
-                print(f"[ReadingPositionManager] Failed to load positions: {e}")
+                logger.error("Failed to load positions: %s", e)
 
-    def _save_positions(self):
+    def _save_positions(self) -> None:
         """Save positions to persistent storage."""
         try:
             data = {file_id: pos.to_dict() for file_id, pos in self._positions.items()}
             with open(self.positions_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"[ReadingPositionManager] Failed to save positions: {e}")
+            logger.error("Failed to save positions: %s", e)
 
-    def save_position(self, position: ReadingPosition):
+    def save_position(self, position: ReadingPosition) -> None:
         """Save or update a reading position."""
         position.last_updated = datetime.now().isoformat()
         self._positions[position.file_id] = position
         self._save_positions()
-        print(
-            f"[ReadingPositionManager] Saved position for {position.file_name}: word {position.current_word_index}"
+        logger.debug(
+            "Saved position for %s: word %d",
+            position.file_name,
+            position.current_word_index,
         )
 
     def get_position(self, file_id: str) -> Optional[ReadingPosition]:
         """Get reading position for a file."""
         return self._positions.get(file_id)
 
-    def delete_position(self, file_id: str):
+    def delete_position(self, file_id: str) -> None:
         """Delete reading position for a file."""
         if file_id in self._positions:
             del self._positions[file_id]
             self._save_positions()
-            print(f"[ReadingPositionManager] Deleted position for {file_id}")
+            logger.debug("Deleted position for %s", file_id)
 
     def get_all_positions(self) -> List[ReadingPosition]:
         """Get all saved reading positions."""
