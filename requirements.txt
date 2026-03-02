@@ -64,3 +64,7 @@ psutil>=5.9.0  # For process management (LLM server control)
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.0.0
+
+# Config validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
