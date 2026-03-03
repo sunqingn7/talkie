@@ -1,0 +1,20 @@
+{
+  "name": "example_calendar",
+  "version": "1.0.0",
+  "description": "Example calendar plugin for managing events",
+  "author": "Talkie Demo",
+  "tools": [
+    "create_event",
+    "list_events",
+    "delete_event"
+  ],
+  "dependencies": [],
+  "config_schema": {
+    "calendar_name": {
+      "type": "string",
+      "default": "default",
+      "description": "Name of the calendar to use"
+    }
+  },
+  "enabled": true
+}
