@@ -11,7 +11,7 @@ import os
 import tempfile
 import subprocess
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -41,6 +41,7 @@ from core.session_memory import get_session_memory, SessionMemory
 from core.memory_manager import get_memory_manager
 from tools.file_attachment_tool import FileAttachmentTool
 from web.memory_routes import router as memory_router
+from web.timer_routes import router as timer_router
 
 # Import new multi-LLM components
 try:
@@ -49,6 +50,14 @@ try:
     MULTI_LLM_AVAILABLE = True
 except ImportError:
     MULTI_LLM_AVAILABLE = False
+
+# Import plugin manager
+try:
+    from plugins.plugin_manager import get_plugin_manager
+
+    PLUGIN_MANAGER_AVAILABLE = True
+except ImportError:
+    PLUGIN_MANAGER_AVAILABLE = False
 
 import yaml
 import os
@@ -152,6 +161,18 @@ class WebTalkieInterface:
         self.memory_manager = get_memory_manager(memory_dir=memory_dir, auto_start=True)
         self.current_session_id = None  # Track current chat session
         print(f"[MemoryManager] Initialized at {memory_dir}")
+
+        # Initialize plugin manager
+        self.plugin_manager = None
+        if PLUGIN_MANAGER_AVAILABLE:
+            plugin_dir = os.path.join(os.path.dirname(__file__), "..", "..", "plugins")
+            self.plugin_manager = get_plugin_manager(plugin_dir=plugin_dir)
+            # Set up timer notification callback
+            from plugins.cron_timer import get_timer_store
+
+            timer_store = get_timer_store()
+            timer_store.set_notification_callback(self._on_timer_complete)
+            print(f"[PluginManager] Initialized at {plugin_dir}")
 
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -271,6 +292,11 @@ class WebTalkieInterface:
             "upload_dir", os.path.join(tempfile.gettempdir(), "talkie_uploads")
         )
         self.file_attachment_tool = FileAttachmentTool(upload_config)
+
+        # Start plugin manager
+        if self.plugin_manager:
+            self.plugin_manager.start()
+            print("[Web Server] Plugin manager started")
 
         print("✅ Web interface ready!")
 
@@ -2126,6 +2152,40 @@ CRITICAL RULES:
                 "timestamp": datetime.now().isoformat(),
             }
 
+    def _on_timer_complete(self, timer: Any) -> None:
+        """Callback when a timer completes."""
+        print(f"[Timer] Timer {timer.timer_id} completed: {timer.description}")
+
+        # Create notification message
+        message = f"⏰ Timer complete: {timer.description}"
+
+        # Speak the notification
+        try:
+            from tools.tts_tool import speak
+
+            speak(message)
+            print(f"[Timer] Spoke notification: {message}")
+        except Exception as e:
+            print(f"[Timer] Failed to speak notification: {e}")
+
+        # Broadcast to web clients
+        asyncio.create_task(self._broadcast_timer_notification(timer))
+
+    async def _broadcast_timer_notification(self, timer: Any) -> None:
+        """Broadcast timer completion to all web clients."""
+        notification = {
+            "type": "timer_notification",
+            "timer_id": timer.timer_id,
+            "description": timer.description,
+            "duration_seconds": timer.duration_seconds,
+            "completed_at": datetime.now().isoformat(),
+            "message": f"⏰ Timer complete: {timer.description}",
+        }
+        await self.manager.broadcast(notification)
+        print(
+            f"[Timer] Broadcast notification to {len(self.manager.active_connections)} clients"
+        )
+
     async def search_session_memory(self, query: str, limit: int = 5) -> dict:
         """Search session memory for messages matching query."""
         try:
@@ -2189,6 +2249,9 @@ app = FastAPI(
 
 # Include memory routes
 app.include_router(memory_router)
+
+# Include timer routes
+app.include_router(timer_router)
 
 # Mount static files
 app.mount(

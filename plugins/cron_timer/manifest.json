@@ -1,0 +1,20 @@
+{
+  "name": "cron_timer",
+  "version": "1.0.0",
+  "description": "Schedule timed notifications with voice alerts",
+  "author": "Talkie",
+  "tools": [
+    "set_timer",
+    "list_timers",
+    "cancel_timer"
+  ],
+  "dependencies": [],
+  "config_schema": {
+    "notification_voice": {
+      "type": "string",
+      "default": "default",
+      "description": "Voice to use for timer notifications"
+    }
+  },
+  "enabled": true
+}
