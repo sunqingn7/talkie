@@ -255,6 +255,9 @@ class LLMOrchestrator:
         4. Main LLM synthesizes final response
         """
 
+        # Set tools for execution (needed for tool call handling)
+        self.set_tools(tools)
+
         # Prepare messages
         messages = self.main_provider.prepare_messages(
             user_input, conversation_history, system_prompt

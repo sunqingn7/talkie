@@ -140,6 +140,21 @@ class TalkieApp {
             item.addEventListener('click', (e) => this.switchView(e));
         });
         
+        // Mobile menu button
+        const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+        if (mobileMenuBtn) {
+            mobileMenuBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.openSidebar();
+            });
+        }
+        
+        // Sidebar overlay close
+        const sidebarOverlay = document.getElementById('sidebar-overlay');
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', () => this.closeSidebar());
+        }
+        
         // Chat input
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
@@ -675,6 +690,16 @@ class TalkieApp {
                 }
                 break;
 
+            case 'llm_provider_switched':
+                this.showNotification(data.message, data.success ? 'success' : 'error');
+                if (data.success) {
+                    const providerSelect = document.getElementById('llm-provider-select');
+                    if (providerSelect) {
+                        providerSelect.value = data.provider;
+                    }
+                }
+                break;
+
             case 'tts_engine_switched':
                 // Show notification - use warning if it's a fallback
                 const notifType = data.message && data.message.includes('not available') ? 'warning' : (data.success ? 'success' : 'error');
@@ -1157,6 +1182,27 @@ class TalkieApp {
             view.classList.remove('active');
         });
         document.getElementById(`${viewName}-view`).classList.add('active');
+        
+        // Close sidebar on mobile
+        this.closeSidebar();
+    }
+    
+    closeSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        if (sidebar) {
+            sidebar.classList.remove('open');
+            if (overlay) overlay.classList.remove('visible');
+        }
+    }
+    
+    openSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        if (sidebar) {
+            sidebar.classList.add('open');
+            if (overlay) overlay.classList.add('visible');
+        }
     }
     
     updateSystemStatus(data) {
@@ -1273,7 +1319,7 @@ class TalkieApp {
         const providerSelect = document.getElementById('llm-provider-select');
         if (providerSelect && data.llm_providers) {
             providerSelect.innerHTML = data.llm_providers.map(provider => `
-                <option value="${provider}">${provider}</option>
+                <option value="${provider}" ${provider === data.current_llm_provider ? 'selected' : ''}>${provider}</option>
             `).join('');
         }
         

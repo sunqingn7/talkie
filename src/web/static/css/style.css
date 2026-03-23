@@ -1006,6 +1006,33 @@ body {
     .sidebar {
         width: 60px;
         padding: 12px 8px;
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 1001;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+    }
+    
+    .sidebar.open {
+        transform: translateX(0);
+    }
+    
+    .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+    }
+    
+    .sidebar-overlay.visible {
+        display: block;
+    }
+    
+    .mobile-menu-btn {
+        display: flex !important;
     }
     
     .logo span,
@@ -1021,6 +1048,202 @@ body {
     
     .control-grid {
         grid-template-columns: 1fr;
+    }
+    
+    .main-content {
+        width: 100% !important;
+        left: 0 !important;
+    }
+    
+    .chat-header h2 {
+        font-size: 16px;
+    }
+    
+    .chat-header h2 i {
+        display: none;
+    }
+    
+    .input-wrapper {
+        padding: 8px;
+    }
+    
+    #message-input {
+        font-size: 16px;
+    }
+    
+    .btn-send, .btn-voice, .btn-attachment {
+        width: 40px;
+        height: 40px;
+    }
+    
+    .quick-actions {
+        flex-direction: column;
+    }
+    
+    .quick-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .mobile-back-btn {
+        display: flex !important;
+    }
+    
+    .mobile-menu-btn {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--text-primary);
+        font-size: 20px;
+        cursor: pointer;
+        padding: 8px;
+        margin-right: 8px;
+    }
+    
+    .chat-header {
+        display: flex;
+        align-items: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .sidebar {
+        width: 80%;
+        max-width: 280px;
+    }
+    
+    .logo span {
+        display: block !important;
+    }
+    
+    .logo {
+        justify-content: center;
+    }
+    
+    .logo i {
+        font-size: 24px;
+    }
+    
+    .nav-item span {
+        display: block !important;
+    }
+    
+    .view-header h2 {
+        font-size: 18px;
+    }
+    
+    .control-card {
+        padding: 12px;
+    }
+    
+    .card-header h3 {
+        font-size: 14px;
+    }
+    
+    .setting-item {
+        padding: 12px 0;
+    }
+    
+    .messages {
+        padding: 12px;
+    }
+    
+    .message {
+        max-width: 90%;
+        padding: 10px 14px;
+    }
+    
+    .input-container {
+        padding: 10px;
+    }
+    
+    .tool-btn {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+    
+    .quick-btn {
+        padding: 10px 14px;
+        font-size: 13px;
+    }
+    
+    .welcome-message h3 {
+        font-size: 18px;
+    }
+    
+    .welcome-message p {
+        font-size: 13px;
+    }
+}
+    
+    .sidebar.open {
+        transform: translateX(0);
+    }
+    
+    .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+    }
+    
+    .sidebar-overlay.visible {
+        display: block;
+    }
+    
+    .mobile-menu-btn {
+        display: flex !important;
+    }
+    
+    .logo span,
+    .nav-item span,
+    .sidebar-footer {
+        display: none;
+    }
+    
+    .nav-item {
+        justify-content: center;
+        padding: 12px;
+    }
+    
+    .control-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .main-content {
+        width: 100% !important;
+        left: 0 !important;
+    }
+    
+    .chat-header h2 {
+        font-size: 16px;
+    }
+    
+    .chat-header h2 i {
+        display: none;
+    }
+    
+    .input-wrapper {
+        padding: 8px;
+    }
+    
+    #message-input {
+        font-size: 16px;
+    }
+    
+    .btn-send, .btn-voice, .btn-attachment {
+        width: 40px;
+        height: 40px;
+    }
+    
+    .quick-actions {
+        flex-direction: column;
+    }
+    
+    .quick-btn {
+        width: 100%;
+        justify-content: center;
     }
 }
 

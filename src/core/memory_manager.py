@@ -28,6 +28,7 @@ from queue import Queue
 import time
 
 from src.utils.logger import get_logger
+from src.core.llm_client import LLMClient
 
 logger = get_logger(__name__)
 
@@ -111,6 +112,7 @@ class MemoryManager:
         memory_dir: Optional[str] = None,
         summary_interval_hours: float = 1.0,
         auto_summarize: bool = True,
+        llm_client: Optional[LLMClient] = None,
     ):
         """
         Initialize memory manager.
@@ -119,12 +121,14 @@ class MemoryManager:
             memory_dir: Base directory for memory storage
             summary_interval_hours: Hours between auto-summarization
             auto_summarize: Enable automatic summarization
+            llm_client: Optional LLM client for intelligent summarization
         """
         self.memory_base = Path(memory_dir or "Memory")
         self.memory_base.mkdir(parents=True, exist_ok=True)
 
-        self.summary_interval = summary_interval_hours * 3600  # Convert to seconds
+        self.summary_interval = summary_interval_hours * 3600
         self.auto_summarize = auto_summarize
+        self._llm_client = llm_client
 
         # Current sessions (session_id -> Session)
         self._sessions: Dict[str, Session] = {}
@@ -321,8 +325,7 @@ class MemoryManager:
         """
         Create summary content from sessions.
 
-        Note: This is a basic implementation. For LLM-powered summaries,
-        integrate with LLM provider here.
+        Uses LLM for intelligent summarization if available.
         """
         lines = [
             f"# Daily Summary - {date_str}",
@@ -331,20 +334,38 @@ class MemoryManager:
             "",
         ]
 
-        # For now, create a simple summary listing all sessions
-        # Future enhancement: Use LLM to generate intelligent summaries
+        all_conversations = []
+        for session_id, content in sessions:
+            session_time = re.search(r"\d{2}:\d{2}:\d{2}", content)
+            time_str = session_time.group(0) if session_time else "Unknown"
+            msg_count = content.count("👤")
+            all_conversations.append(
+                {
+                    "id": session_id,
+                    "time": time_str,
+                    "messages": msg_count,
+                    "content": content,
+                }
+            )
+
+        if self._llm_client and sessions:
+            try:
+                llm_summary = self._create_llm_summary(date_str, all_conversations)
+                if llm_summary:
+                    lines.append(llm_summary)
+                    return "\n".join(lines)
+            except Exception as e:
+                logger.warning(f"LLM summarization failed, falling back to basic: {e}")
+
         lines.append("## Sessions")
         lines.append("")
 
         for session_id, content in sessions:
-            # Extract key info from session
             session_time = re.search(r"\d{2}:\d{2}:\d{2}", content)
             time_str = session_time.group(0) if session_time else "Unknown"
 
-            # Count messages
             msg_count = content.count("👤")
 
-            # Get first few lines as preview
             preview_lines = content.split("\n")[:5]
             preview = " ".join(preview_lines).replace("\n", " ")[:200] + "..."
 
@@ -353,7 +374,6 @@ class MemoryManager:
             lines.append(f"- **Preview:** {preview}")
             lines.append("")
 
-        # Add section for key topics (placeholder for LLM enhancement)
         lines.append("## Key Topics")
         lines.append("")
         lines.append(
@@ -362,6 +382,63 @@ class MemoryManager:
         lines.append("")
 
         return "\n".join(lines)
+
+    def _create_llm_summary(self, date_str: str, sessions: List[Dict]) -> Optional[str]:
+        """Generate intelligent summary using LLM."""
+        if not self._llm_client:
+            return None
+
+        prompt_lines = [
+            f"You are a helpful assistant summarizing a day's worth of conversations.",
+            f"Summarize the following {len(sessions)} chat sessions from {date_str} into a coherent daily summary.",
+            "",
+            "For each session, provide:",
+            "1. A brief description of what was discussed",
+            "2. Key topics or decisions made",
+            "",
+            "Finally, extract the main themes/topics of the day.",
+            "",
+            "Sessions:",
+        ]
+
+        for i, session in enumerate(sessions, 1):
+            preview = session.get("content", "")[:800]
+            prompt_lines.append(
+                f"\n--- Session {i}: {session.get('id')} at {session.get('time')} ---"
+            )
+            prompt_lines.append(preview)
+
+        prompt_lines.extend(
+            [
+                "",
+                "Now provide your summary in this format:",
+                "## Overview",
+                "[Brief summary of the day's conversations]",
+                "",
+                "## Key Discussions",
+                "- [Topic 1]: [Brief description]",
+                "- [Topic 2]: [Brief description]",
+                "",
+                "## Main Themes",
+                "- Theme 1",
+                "- Theme 2",
+            ]
+        )
+
+        prompt = "\n".join(prompt_lines)
+
+        try:
+            response = self._llm_client.chat_completion(
+                messages=[{"role": "user", "content": prompt}], stream=False
+            )
+
+            if response.get("choices"):
+                content = response["choices"][0]["message"]["content"]
+                return content
+        except Exception as e:
+            logger.error(f"LLM summary generation error: {e}")
+
+        return None
 
     def get_sessions_for_date(
         self, date_str: Optional[str] = None
@@ -583,13 +660,15 @@ _memory_manager: Optional[MemoryManager] = None
 
 
 def get_memory_manager(
-    memory_dir: Optional[str] = None, auto_start: bool = True
+    memory_dir: Optional[str] = None,
+    auto_start: bool = True,
+    llm_client: Optional[LLMClient] = None,
 ) -> MemoryManager:
     """Get or create the global memory manager instance."""
     global _memory_manager
 
     if _memory_manager is None:
-        _memory_manager = MemoryManager(memory_dir=memory_dir)
+        _memory_manager = MemoryManager(memory_dir=memory_dir, llm_client=llm_client)
         if auto_start:
             _memory_manager.start()
 

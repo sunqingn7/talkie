@@ -1096,6 +1096,23 @@ CRITICAL RULES:
             llm_model = "Not running"
             is_running = False
 
+        # Get current LLM provider from llm_config.yaml
+        current_llm_provider = "unknown"
+        llm_config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "llm_config.yaml"
+        )
+        if os.path.exists(llm_config_path):
+            try:
+                with open(llm_config_path, "r") as f:
+                    llm_config = yaml.safe_load(f)
+                    current_llm_provider = (
+                        llm_config.get("llm", {})
+                        .get("main", {})
+                        .get("provider", "unknown")
+                    )
+            except Exception:
+                pass
+
         # Get voice daemon status
         voice_daemon_status = {}
         if self.mcp_server and self.mcp_server.voice_daemon:
@@ -1111,6 +1128,7 @@ CRITICAL RULES:
             if self.mcp_server
             else [],
             "conversation_count": len(self.conversation_history) // 2,
+            "current_llm_provider": current_llm_provider,
             "config": {
                 "tts_engine": self.config.get("tts", {}).get("engine", "unknown"),
                 "tts_model": self.config.get("tts", {}).get("coqui_model", "unknown"),
